@@ -40,7 +40,20 @@ it without asking, `--no-review` skips the question).
 
 ### Package upgrades
 
-`spoor run -- brew upgrade jq` automatically watches `jq`'s own Cellar
+```sh
+spoor upgrade --list          # what is outdated, what would be captured
+spoor upgrade tree            # brew update, capture, upgrade tree (+ outdated deps), open the review
+spoor upgrade                 # every outdated formula
+spoor upgrade python@3.12     # install a versioned formula Homebrew ships
+```
+
+The review groups the upgrade by package (`▸ tree 2.2.1 → 2.3.2`), with
+each changed file underneath and its diff beside it. Homebrew cannot
+install arbitrary versions, only versioned formulae it ships; spoor says so
+instead of guessing. `-y` skips the confirmation, `--no-review` skips the
+review, `--no-update` skips `brew update`.
+
+`spoor run -- brew upgrade jq` also automatically watches `jq`'s own Cellar
 folder, with file contents. An upgrade creates a new version folder and
 deletes the old one. The review pairs the two and shows each file as a real
 diff under **UPGRADE**: changelog, man page, formula, headers. Binaries show

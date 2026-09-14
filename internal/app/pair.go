@@ -137,6 +137,11 @@ func (a *App) View(pre, post *model.Manifest, changes []model.Change) []Item {
 		}
 		sort.Strings(sorted)
 		rule := kb.Rule{Category: kb.Upgrade, Risk: kb.Notice, Title: label, Explain: upgradeExplain}
+		if len(sorted) == 0 {
+			up = append(up, Item{Change: model.Change{Path: newDir, OldPath: oldDir, Kind: model.Modified}, Rule: rule, Virtual: true,
+				Label: "(version folders only: files were not captured)"})
+			continue
+		}
 		for _, rel := range sorted {
 			o, n := olds[rel], news[rel]
 			var ch model.Change

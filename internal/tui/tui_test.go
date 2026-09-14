@@ -202,7 +202,7 @@ func TestUpgradeComparisonOpensFirst(t *testing.T) {
 	}
 	m.Update(tea.WindowSizeMsg{Width: 150, Height: 40})
 	v := m.View()
-	for _, want := range []string{"UPGRADE", "pkg/NEWS", "+1.1 faster", "pkg 1.0 → 1.1"} {
+	for _, want := range []string{"UPGRADE", "▸ pkg 1.0 → 1.1 (2)", "  NEWS", "+1.1 faster"} {
 		if !strings.Contains(v, want) {
 			t.Errorf("missing %q:\n%s", want, v)
 		}

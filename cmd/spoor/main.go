@@ -31,6 +31,11 @@ var version = "0.1.0-dev"
 
 const usage = `spoor — see what commands do to your machine, inspect it, undo it.
 
+Upgrade (Homebrew)
+  spoor upgrade [NAME...] [--list] [-y] [--no-update] [--no-review]
+                              upgrade all outdated (or NAME), capture their files, open the review
+  spoor upgrade NAME@VERSION  install a versioned formula Homebrew ships (e.g. python@3.12)
+
 Record
   spoor run [-m MSG] [--trace] [--add-root SPEC] -- CMD...   record CMD's effects, then offer the review
   spoor snap [-m MSG]                                 commit the current state (if changed)
@@ -157,7 +162,7 @@ func init() {
 		"init": cmdInit, "roots": cmdRoots, "snap": cmdSnap, "run": cmdRun, "status": cmdStatus,
 		"log": cmdLog, "show": cmdShow, "diff": cmdDiff, "review": cmdReview, "blame": cmdBlame,
 		"revert": cmdRevert, "restore": cmdRestore, "note": cmdNote, "explain": cmdExplain,
-		"quickfix": cmdQuickfix, "export": cmdExport, "try": cmdTry, "gc": cmdGC,
+		"quickfix": cmdQuickfix, "export": cmdExport, "try": cmdTry, "gc": cmdGC, "upgrade": cmdUpgrade,
 	}
 }
 

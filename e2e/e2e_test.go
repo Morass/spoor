@@ -521,3 +521,95 @@ rm -rf "$C/tree/2.2.1"
 	s.must("revert", "HEAD", "--apply")
 	sameTree(t, "brew prefix after revert", fingerprintDir(prefix), before)
 }
+
+const fakeBrew = `#!/bin/sh
+C="$HOMEBREW_CELLAR"; P=$(dirname "$C")
+bump() { # name old new
+  [ -d "$C/$1/$2" ] || return 0
+  mkdir -p "$C/$1/$3"; cp -R "$C/$1/$2/." "$C/$1/$3/"
+  printf 'Version %s\n' "$3" >> "$C/$1/$3/CHANGES"
+  ln -sfn "../Cellar/$1/$3" "$P/opt/$1"; rm -rf "$C/$1/$2"
+}
+entry() { [ -d "$C/$1/$2" ] && printf '{"name":"%s","installed_versions":["%s"],"current_version":"%s","pinned":false},' "$1" "$2" "$3"; }
+case "$1" in
+--cellar) echo "$C" ;;
+update) echo "Already up-to-date." ;;
+outdated) o="$(entry tree 2.2.1 2.3.2)$(entry libz 1.3.1 1.3.2)$(entry watch 4.0.5 4.0.7)"; echo "{\"formulae\":[${o%,}],\"casks\":[]}" ;;
+deps) [ "$3" = tree ] && echo libz; exit 0 ;;
+info) case "$4" in tree|libz|watch|node@20) exit 0;; *) echo "Error: No available formula" >&2; exit 1;; esac ;;
+upgrade) shift 2; for n in "$@"; do case $n in tree) bump libz 1.3.1 1.3.2; bump tree 2.2.1 2.3.2;; libz) bump libz 1.3.1 1.3.2;; watch) bump watch 4.0.5 4.0.7;; esac; done ;;
+install) mkdir -p "$C/node@20/20.1.0/bin"; echo node20 > "$C/node@20/20.1.0/bin/node"; ln -sfn ../Cellar/node@20/20.1.0 "$P/opt/node@20" ;;
+esac
+`
+
+func TestUpgradeCommand(t *testing.T) {
+	s := newSandbox(t)
+	prefix := filepath.Join(s.root, "brew")
+	cellar := filepath.Join(prefix, "Cellar")
+	fake := filepath.Join(s.root, "fakebrew")
+	os.WriteFile(fake, []byte(fakeBrew), 0o755)
+	s.env = append(s.env, "HOMEBREW_CELLAR="+cellar, "SPOOR_BREW="+fake)
+	put := func(rel, body string) {
+		p := filepath.Join(prefix, rel)
+		os.MkdirAll(filepath.Dir(p), 0o755)
+		os.WriteFile(p, []byte(body), 0o644)
+	}
+	put("Cellar/tree/2.2.1/CHANGES", "Version 2.2.1\n")
+	put("Cellar/tree/2.2.1/share/man/man1/tree.1", ".TH TREE\n")
+	put("Cellar/libz/1.3.1/CHANGES", "Version 1.3.1\n")
+	put("Cellar/libz/1.3.1/include/zlib.h", "#define ZLIB_VERSION \"1.3.1\"\n")
+	put("Cellar/watch/4.0.5/CHANGES", "Version 4.0.5\n")
+	os.MkdirAll(filepath.Join(prefix, "opt"), 0o755)
+	for _, l := range [][2]string{{"tree", "2.2.1"}, {"libz", "1.3.1"}, {"watch", "4.0.5"}} {
+		os.Symlink("../Cellar/"+l[0]+"/"+l[1], filepath.Join(prefix, "opt", l[0]))
+	}
+	s.initDefault()
+	s.must("snap")
+	before := fingerprintDir(prefix)
+
+	_, errOut, _ := s.spoor("upgrade", "--list", "tree")
+	for _, want := range []string{"tree", "2.2.1", "→ 2.3.2", "libz", "(dependency of tree)"} {
+		if !strings.Contains(errOut, want) {
+			t.Errorf("--list missing %q:\n%s", want, errOut)
+		}
+	}
+	if strings.Contains(errOut, "watch") {
+		t.Errorf("--list tree must not include unrelated packages:\n%s", errOut)
+	}
+	sameTree(t, "--list changes nothing", fingerprintDir(prefix), before)
+
+	_, errOut, code := s.spoor("upgrade", "-y", "tree")
+	if code != 0 {
+		t.Fatalf("upgrade tree: %d\n%s", code, errOut)
+	}
+	show := s.must("show", "--patch")
+	for _, want := range []string{"tree 2.2.1 → 2.3.2", "libz 1.3.1 → 1.3.2", "+Version 2.3.2", "+Version 1.3.2", "brew upgrade tree"} {
+		if !strings.Contains(show, want) {
+			t.Errorf("show missing %q:\n%s", want, show)
+		}
+	}
+	if strings.Contains(show, "watch 4.0.5") {
+		t.Error("watch was not asked for")
+	}
+	s.must("revert", "HEAD", "--apply")
+	sameTree(t, "revert of spoor upgrade", fingerprintDir(prefix), before)
+
+	if _, errOut, code = s.spoor("upgrade", "-y"); code != 0 {
+		t.Fatalf("upgrade all: %s", errOut)
+	}
+	if show = s.must("show"); !strings.Contains(show, "watch 4.0.5 → 4.0.7") || !strings.Contains(show, "tree 2.2.1 → 2.3.2") {
+		t.Errorf("upgrade all:\n%s", show)
+	}
+	if _, errOut, _ = s.spoor("upgrade", "-y", "tree"); !strings.Contains(errOut, "already up to date") {
+		t.Errorf("up-to-date package: %s", errOut)
+	}
+	if _, errOut, code = s.spoor("upgrade", "-y", "node@20"); code != 0 {
+		t.Fatalf("versioned formula: %s", errOut)
+	}
+	if show = s.must("show"); !strings.Contains(show, "node@20") {
+		t.Errorf("versioned install not recorded:\n%s", show)
+	}
+	if _, errOut, code = s.spoor("upgrade", "-y", "tree@1.0"); code == 0 || !strings.Contains(errOut, "cannot install arbitrary versions") {
+		t.Errorf("unknown version should explain the Homebrew limit: %d %s", code, errOut)
+	}
+}

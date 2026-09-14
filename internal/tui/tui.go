@@ -44,6 +44,7 @@ const (
 type row struct {
 	header bool
 	cat    kb.Category
+	group  string // sub-header: one package's upgrade
 	n      int
 	item   int
 }
@@ -236,7 +237,7 @@ func (m *Model) hasText(it *app.Item) bool {
 
 func (m *Model) rowLabel(it app.Item) string {
 	if it.Virtual {
-		return strings.Fields(it.Rule.Title)[0] + "/" + it.Label
+		return "  " + it.Label
 	}
 	return m.app.Tilde(it.Path)
 }
@@ -256,7 +257,7 @@ func (m *Model) rebuild() {
 	m.rows = nil
 	m.hiddenNoise = 0
 	var cat kb.Category = "\x00"
-	hdr := -1
+	hdr, ghdr, grp := -1, -1, ""
 	f := strings.ToLower(m.filter)
 	for i, it := range m.items {
 		if it.Rule.Category == kb.Noise && !m.showNoise {
@@ -267,11 +268,19 @@ func (m *Model) rebuild() {
 			continue
 		}
 		if it.Rule.Category != cat {
-			cat = it.Rule.Category
+			cat, grp = it.Rule.Category, ""
 			m.rows = append(m.rows, row{header: true, cat: cat})
 			hdr = len(m.rows) - 1
 		}
+		if it.Virtual && it.Rule.Title != grp {
+			grp = it.Rule.Title
+			m.rows = append(m.rows, row{header: true, cat: cat, group: grp})
+			ghdr = len(m.rows) - 1
+		}
 		m.rows[hdr].n++
+		if it.Virtual {
+			m.rows[ghdr].n++
+		}
 		m.rows = append(m.rows, row{item: i})
 	}
 	m.cur = -1
@@ -1175,6 +1184,10 @@ func (m *Model) listView(w, h int) string {
 	iw := w - 2
 	for i := m.top; i < len(m.rows) && len(lines) < inner; i++ {
 		r := m.rows[i]
+		if r.header && r.group != "" {
+			lines = append(lines, lipgloss.NewStyle().Foreground(accent).Render(trunc(fmt.Sprintf(" ▸ %s (%d)", r.group, r.n), iw)))
+			continue
+		}
 		if r.header {
 			lines = append(lines, bold.Render(trunc(fmt.Sprintf("▾ %s (%d)", strings.ToUpper(string(r.cat)), r.n), iw)))
 			continue
