@@ -32,8 +32,8 @@ var version = "0.1.0-dev"
 const usage = `spoor — see what commands do to your machine, inspect it, undo it.
 
 Upgrade (Homebrew)
-  spoor upgrade [NAME...] [--list] [-y] [--no-update] [--no-review]
-                              upgrade all outdated (or NAME), capture their files, open the review
+  spoor upgrade [NAME...] [--list] [--all] [-y] [--no-update] [--no-review]
+                              no names: pick from a checklist; capture files, upgrade, open the review
   spoor upgrade NAME@VERSION  install a versioned formula Homebrew ships (e.g. python@3.12)
 
 Record

@@ -24,7 +24,8 @@ func cmdUpgrade(a *app.App, args []string) (int, error) {
 	fs := newFS("upgrade")
 	list := fs.Bool("list", false, "only show what would be upgraded")
 	noUpdate := fs.Bool("no-update", false, "skip `brew update` (use the formula list you already have)")
-	yes := fs.Bool("y", false, "do not ask before upgrading")
+	yes := fs.Bool("y", false, "do not ask; with no names, upgrade everything outdated")
+	all := fs.Bool("all", false, "upgrade every outdated formula without the picker")
 	noReview := fs.Bool("no-review", false, "do not open the review afterwards")
 	msg := fs.String("m", "", "message")
 	names, err := parse(fs, args)
@@ -53,6 +54,33 @@ func cmdUpgrade(a *app.App, args []string) (int, error) {
 	byName := map[string]brew.Outdated{}
 	for _, o := range outdated {
 		byName[o.Name] = o
+	}
+
+	tty := isatty.IsTerminal(os.Stdin.Fd()) && isatty.IsTerminal(os.Stdout.Fd())
+	if len(names) == 0 && !*list && !*all && !*yes && tty {
+		var items []tui.PickItem
+		for _, o := range outdated {
+			it := tui.PickItem{Name: o.Name, From: strings.Join(o.Installed, ","), To: o.Current}
+			if o.Pinned {
+				it.Disabled = "pinned (brew unpin " + o.Name + ")"
+			} else {
+				it.Bytes, it.Files = b.Size(o.Name, scan.DefaultMaxContent)
+			}
+			items = append(items, it)
+		}
+		if len(items) == 0 {
+			fmt.Fprintln(a.Err, "nothing to upgrade")
+			return 0, nil
+		}
+		sel, ok, err := tui.Pick(fmt.Sprintf("upgrade — %d outdated formulae, tick the ones to upgrade", len(items)), items)
+		if err != nil {
+			return 1, err
+		}
+		if !ok || len(sel) == 0 {
+			fmt.Fprintln(a.Err, "nothing selected")
+			return 0, nil
+		}
+		names = sel
 	}
 
 	var upgrades, installs, skipped []string
@@ -141,7 +169,6 @@ func cmdUpgrade(a *app.App, args []string) (int, error) {
 	if *list {
 		return 0, nil
 	}
-	tty := isatty.IsTerminal(os.Stdin.Fd()) && isatty.IsTerminal(os.Stdout.Fd())
 	if !*yes && tty {
 		fmt.Fprintf(a.Err, "\n  Upgrade %d package(s)? [Y/n] ", len(upgrades)+len(installs))
 		line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
