@@ -369,8 +369,6 @@ scripts/screenshots.sh          # regenerates docs/images/*.svg in a sandbox
 scripts/prepublish-check.sh     # fails on e-mail identities, home paths, token literals, agent files
 ```
 
-Architecture, security model, test matrix and release steps: [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
-
 The end-to-end tests check, byte for byte, that `revert` restores the recorded
 tree, that reverting the revert brings the change back, and that conflicts,
 forced reverts, restore, drift, blame, upgrades, secrets and redaction behave
