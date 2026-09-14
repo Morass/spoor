@@ -169,7 +169,7 @@ cat > "$HOME/Library/LaunchAgents/dev.spoor.e2e.plist" <<'EOF'
 <key>KeepAlive</key><true/>
 </dict></plist>
 EOF
-printf '\n# added by foo\nexport PATH="$HOME/.foo/bin:$PATH"\nexport FOO_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz0123456789\n' >> "$HOME/.zshrc"
+printf '\n# added by foo\nexport PATH="$HOME/.foo/bin:$PATH"\n' >> "$HOME/.zshrc"
 printf '#!/bin/sh\necho foo\n' > "$HOME/.local/bin/foo"
 chmod 755 "$HOME/.local/bin/foo"
 echo 'a = 1' > "$HOME/.config/foo/config.toml"
@@ -204,7 +204,8 @@ func TestInstallInspectRevertRoundTrip(t *testing.T) {
 
 	script := filepath.Join(s.root, "install.sh")
 	os.WriteFile(script, []byte(installer), 0o755)
-	out, errOut, code := s.spoor("run", "--", "sh", script)
+	tok := fakeToken()
+	out, errOut, code := s.spoor("run", "-m", "install foo", "--", "sh", script, "--api-token", tok)
 	if code != 3 {
 		t.Fatalf("exit code not passed through: %d\n%s\n%s", code, out, errOut)
 	}
@@ -216,6 +217,9 @@ func TestInstallInspectRevertRoundTrip(t *testing.T) {
 	zshPost := s.read(".zshrc")
 
 	show := s.must("show", runID)
+	if strings.Contains(show, tok) || !strings.Contains(show, "--api-token [REDACTED]") {
+		t.Errorf("command-line credential not redacted when recorded:\n%s", show)
+	}
 	for _, want := range []string{"~ ~/.zshrc", "+ ~/.local/bin/foo", "- ~/.oldrc", "m ~/.gitconfig", "~/.config/keep.txt → ~/.config/moved.txt", "+ ~/.config/foo/config.toml"} {
 		if !strings.Contains(show, want) {
 			t.Errorf("show missing %q:\n%s", want, show)
@@ -245,12 +249,12 @@ func TestInstallInspectRevertRoundTrip(t *testing.T) {
 		t.Errorf("quickfix:\n%s", qf)
 	}
 	md := s.must("export", runID)
-	if !strings.Contains(md, "[REDACTED]") || strings.Contains(md, "ghp_") || strings.Contains(md, s.home) {
+	if !strings.Contains(md, "[REDACTED]") || strings.Contains(md, tok) || strings.Contains(md, s.home) {
 		t.Errorf("export not redacted:\n%s", md)
 	}
 	var fp map[string]any
-	if err := json.Unmarshal([]byte(s.must("export", runID, "--format", "json")), &fp); err != nil || fp["secrets_redacted"].(float64) < 1 {
-		t.Errorf("json export: %v %v", err, fp["secrets_redacted"])
+	if err := json.Unmarshal([]byte(s.must("export", runID, "--format", "json")), &fp); err != nil {
+		t.Errorf("json export: %v", err)
 	}
 
 	plan := s.must("revert", runID)
@@ -310,7 +314,7 @@ func TestInstallInspectRevertRoundTrip(t *testing.T) {
 	}
 
 	s.must("gc")
-	if p := s.must("show", runID, "--patch"); !strings.Contains(p, "FOO_TOKEN") {
+	if p := s.must("show", runID, "--patch"); !strings.Contains(p, "+export PATH") {
 		t.Error("gc removed content still referenced by history")
 	}
 	if o, _, _ := s.spoor("snap"); !strings.Contains(o, "nothing changed") {
@@ -334,22 +338,43 @@ func TestMetadataRootsAreHonestAboutUndo(t *testing.T) {
 	}
 }
 
+func fakeToken() string { return "ghp" + "_" + strings.Repeat("Z9", 18) }
+
 func TestSecretsNeverCopiedIntoRepository(t *testing.T) {
 	s := newSandbox(t)
+	tok := fakeToken()
+	pem := "-----BEGIN " + "RSA PRIVATE KEY-----\nMIIEsecretBODYline\n-----END " + "RSA PRIVATE KEY-----\n"
 	s.write(".ssh/id_ed25519", "PRIVATE-KEY-BODY-1\n", 0o600)
+	s.write(".ssh/github", pem, 0o600) // a key without a key-like name
 	s.write(".ssh/config", "Host x\n", 0o644)
-	s.must("init", "--root", filepath.Join(s.home, ".ssh")+":1", "--no-state")
+	s.write(".npmrc", "//registry.npmjs.org/:_authToken=npmsecretvalue1\n", 0o600)
+	s.write(".zshrc", "alias ll='ls -l'\nexport GH_TOKEN="+tok+"\n", 0o644)
+	s.write(".config/app/settings.json", strings.Repeat("{}\n", 110)+pem, 0o644)
+	s.must("init", "--root", s.home+":1", "--root", filepath.Join(s.home, ".ssh")+":1", "--root", filepath.Join(s.home, ".config")+":3", "--no-state")
 	s.must("snap")
 	s.write(".ssh/id_ed25519", "PRIVATE-KEY-BODY-2\n", 0o600)
-	if st := s.must("status"); !strings.Contains(st, "~/.ssh/id_ed25519") {
-		t.Errorf("change to a sensitive file must still be detected:\n%s", st)
+	s.write(".zshrc", "alias ll='ls -la'\nexport GH_TOKEN="+tok+"\n", 0o644)
+	st := s.must("status", "--patch")
+	for _, want := range []string{"~/.ssh/id_ed25519", "~/.zshrc"} {
+		if !strings.Contains(st, want) {
+			t.Errorf("change to a sensitive file must still be detected (%s):\n%s", want, st)
+		}
 	}
 	s.must("snap")
+	for _, out := range []string{st, s.must("show", "--patch"), s.must("export"), s.must("show", "HEAD~1", "--patch")} {
+		for _, leak := range []string{tok, "MIIEsecretBODYline", "npmsecretvalue1", "PRIVATE-KEY-BODY"} {
+			if strings.Contains(out, leak) {
+				t.Errorf("secret %q shown in output:\n%s", leak, out)
+			}
+		}
+	}
 	filepath.WalkDir(s.repo, func(p string, d fs.DirEntry, err error) error {
 		if err == nil && !d.IsDir() {
 			b, _ := os.ReadFile(p)
-			if bytes.Contains(b, []byte("PRIVATE-KEY-BODY")) {
-				t.Errorf("secret body copied into %s", p)
+			for _, leak := range []string{tok, "MIIEsecretBODYline", "npmsecretvalue1", "PRIVATE-KEY-BODY"} {
+				if bytes.Contains(b, []byte(leak)) {
+					t.Errorf("secret %q copied into %s", leak, p)
+				}
 			}
 		}
 		return nil

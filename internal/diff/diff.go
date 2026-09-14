@@ -12,6 +12,7 @@ import (
 	udiff "github.com/aymanbagabas/go-udiff"
 	"github.com/morass/spoor/internal/model"
 	"github.com/morass/spoor/internal/profile"
+	"github.com/morass/spoor/internal/redact"
 	"github.com/morass/spoor/internal/store"
 )
 
@@ -179,15 +180,25 @@ func Content(st *store.Store, e *model.Entry, live bool) ([]byte, string) {
 	if st != nil && st.HasObject(e.Hash) {
 		b, err := st.ReadObject(e.Hash)
 		if err == nil {
-			return b, ""
+			return withhold(b)
 		}
 	}
 	if live && e.Type == model.File {
 		if b, err := os.ReadFile(e.Path); err == nil && store.HashBytes(b) == e.Hash {
-			return b, ""
+			return withhold(b)
 		}
 	}
 	return nil, "content no longer available"
+}
+
+// withhold hides content that looks like it holds a secret: repositories
+// written before content screening existed, live files read for status,
+// and anything the path rules missed.
+func withhold(b []byte) ([]byte, string) {
+	if redact.ContainsSecret(b) {
+		return nil, "not shown: content looks like it holds a secret"
+	}
+	return b, ""
 }
 
 // IsBinary guesses whether bytes are not text.

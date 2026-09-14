@@ -163,13 +163,39 @@ Revert plans against the **live** machine, not just the recorded state:
 
 ## Privacy
 
-- Bodies of key-like files (`~/.ssh/id_*`, `*.pem`, `.netrc`, credentials,
-  anything matching `token` or `secret`) are hashed but never copied into
-  the store. Changes are still detected.
-- `export` redacts tokens, private keys, URL credentials and `key=value`
-  secrets, and replaces the home directory with `~`.
-- On macOS, folders protected by privacy controls are skipped with one
-  warning. Grant your terminal Full Disk Access to include them.
+spoor keeps copies of watched files so it can diff and undo them. What it
+will not keep:
+
+- **Files whose name says secret.** Examples: SSH keys (anything in `~/.ssh`
+  except `config`, `known_hosts`, `authorized_keys` and `*.pub`), `*.pem`,
+  `*.key`, `.env*`, `.npmrc`, `.pypirc`, `.netrc`, `.git-credentials`, the
+  `gh`, `gcloud`, `aws`, `azure`, `kube` and `docker` credential folders,
+  password stores, keychains, shell histories and `/etc/shadow`.
+- **Files whose contents look secret,** whatever their name: private-key
+  blocks, known token formats (GitHub, GitLab, Slack, AWS, OpenAI, Anthropic,
+  Stripe, npm, Vault, JWTs), credentials inside URLs, `Authorization` headers,
+  and literal values assigned to secret-named keys (`AWS_SECRET_ACCESS_KEY=…`,
+  `password: …`). A reference like `TOKEN="$VAR"` is not treated as a secret.
+- **The same content check applies to recorded state** (a crontab line with
+  a token) **and to command lines** (`--token X` is stored as
+  `--token [REDACTED]`).
+
+Such files are still **hashed**, so a change to them shows up in history. Their
+contents are never shown, exported or restorable. Anything that looks secret
+is also withheld from the review, `show --patch` and vimdiff, which covers
+repositories written by older versions; `spoor scrub` removes those old
+copies for good.
+
+`export` is meant for sharing. It redacts tokens, keys, passwords and
+authorization headers, e-mail addresses, SSH host names and users, and home
+directories, and it redacts before truncating a diff. It is still regex
+based: read an export before you publish it.
+
+Temporary copies made for vimdiff are deleted when vimdiff exits (and vim is
+told not to keep swap or history files). Exports, quickfix lists and undo
+scripts are written atomically with private permissions. The repository lives
+in `~/.local/share/spoor` with mode 0700. On macOS, folders protected by
+privacy controls are skipped with one warning.
 
 ## Tracing and previews
 
@@ -196,6 +222,7 @@ Revert plans against the **live** machine, not just the recorded state:
 ```sh
 go test ./...                 # unit, TUI model and sandboxed end-to-end tests
 scripts/tui-smoke.sh          # drives the real UI in tmux (vimdiff, notes, revert)
+scripts/prepublish-check.sh   # fails on e-mails, private paths, token-shaped literals, private agent files
 ```
 
 The end-to-end tests run the real binary against a throwaway `HOME`. They

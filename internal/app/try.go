@@ -8,9 +8,12 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/morass/spoor/internal/model"
+	"github.com/morass/spoor/internal/redact"
+	"github.com/morass/spoor/internal/revert"
 	"github.com/morass/spoor/internal/scan"
 	"github.com/morass/spoor/internal/store"
 	"github.com/morass/spoor/internal/try"
@@ -31,6 +34,24 @@ func (a *App) TryRoots(roots []model.Root) []string {
 		paths = append(paths, r.Path)
 	}
 	return try.PruneNested(paths)
+}
+
+// privateDir makes sure base exists as a directory owned by the current
+// user with no group/other access. /var/tmp is shared: another account
+// could otherwise pre-create the parent and swap workspaces around.
+func privateDir(base string) error {
+	if err := os.Mkdir(base, 0o700); err != nil && !os.IsExist(err) {
+		return err
+	}
+	fi, err := os.Lstat(base)
+	if err != nil {
+		return err
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !fi.IsDir() || fi.Mode()&os.ModeSymlink != 0 || fi.Mode().Perm()&0o077 != 0 || !ok || int(st.Uid) != os.Geteuid() {
+		return fmt.Errorf("unsafe try workspace %s (must be a directory owned by you with mode 700); set SPOOR_TRY_DIR", base)
+	}
+	return nil
 }
 
 func tryWorkspace(id string) string {
@@ -64,6 +85,9 @@ func (a *App) Try(argv []string, roots []model.Root, msg string) (*model.Commit,
 	if strings.HasPrefix(spec.Workspace+"/", a.Home+"/") {
 		return nil, 0, errors.New("SPOOR_TRY_DIR must be outside the overlaid home directory")
 	}
+	if err := privateDir(filepath.Dir(spec.Workspace)); err != nil {
+		return nil, 0, err
+	}
 	if err := os.MkdirAll(spec.Workspace, 0o700); err != nil {
 		return nil, 0, err
 	}
@@ -85,10 +109,12 @@ func (a *App) Try(argv []string, roots []model.Root, msg string) (*model.Commit,
 		return nil, exit, err
 	}
 	if msg == "" {
-		msg = strings.Join(argv, " ")
+		msg = strings.Join(redact.Argv(argv), " ")
+	} else {
+		msg, _ = redact.Text(msg, "")
 	}
 	c := a.newCommit(model.KindTry, msg, pre, post)
-	c.Command, c.Cwd, c.ExitCode, c.Duration = argv, cwd, exit, time.Since(start).Seconds()
+	c.Command, c.Cwd, c.ExitCode, c.Duration = redact.Argv(argv), cwd, exit, time.Since(start).Seconds()
 	c.TryState, c.Workspace = "pending", spec.Workspace
 	return c, exit, a.save(c, false)
 }
@@ -156,6 +182,9 @@ func (a *App) loadTry(ref string) (*model.Commit, try.Spec, error) {
 	if c.TryState != "pending" {
 		return nil, spec, fmt.Errorf("try %s is already %s", c.ID, c.TryState)
 	}
+	if err := privateDir(filepath.Dir(c.Workspace)); err != nil {
+		return nil, spec, err
+	}
 	b, err := os.ReadFile(filepath.Join(c.Workspace, "spec.json"))
 	if err != nil {
 		return nil, spec, fmt.Errorf("try workspace is gone (%s): %w", c.Workspace, err)
@@ -210,7 +239,18 @@ func (a *App) TryApply(ref string, force bool) (*model.Commit, error) {
 		a.St.Unlock()
 		return nil, err
 	}
-	if err := try.Apply(spec, changes); err != nil {
+	idx := map[string]*model.Entry{}
+	for i := range pre.Entries {
+		idx[pre.Entries[i].Path] = &pre.Entries[i]
+	}
+	mayRemove := func(p string) bool {
+		if force {
+			return true
+		}
+		e := idx[p]
+		return e != nil && revert.Matches(p, e)
+	}
+	if err := try.Apply(spec, changes, mayRemove); err != nil {
 		a.St.Unlock()
 		return nil, fmt.Errorf("apply failed part-way (history not updated; inspect with spoor status): %w", err)
 	}

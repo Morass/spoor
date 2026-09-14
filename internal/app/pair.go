@@ -162,9 +162,7 @@ func (a *App) View(pre, post *model.Manifest, changes []model.Change) []Item {
 	for i := range items {
 		for dir, label := range hide {
 			if items[i].Path == dir || strings.HasPrefix(items[i].Path, dir+"/") {
-				if items[i].Path != dir {
-					items[i].Rule = kb.Rule{Category: kb.Noise, Title: "inside " + label, Explain: upgradeExplain}
-				}
+				items[i].Rule = kb.Rule{Category: kb.Noise, Title: "version folder of " + label, Explain: upgradeExplain}
 			}
 		}
 	}

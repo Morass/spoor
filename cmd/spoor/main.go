@@ -20,6 +20,7 @@ import (
 	"github.com/morass/spoor/internal/kb"
 	"github.com/morass/spoor/internal/model"
 	"github.com/morass/spoor/internal/profile"
+	"github.com/morass/spoor/internal/redact"
 	"github.com/morass/spoor/internal/revert"
 	"github.com/morass/spoor/internal/scan"
 	"github.com/morass/spoor/internal/store"
@@ -60,6 +61,7 @@ Share & housekeeping
   spoor quickfix REF [-o FILE]            vim quickfix list of a commit (vim -q FILE)
   spoor export REF [--format md|json]     redacted, shareable footprint
   spoor init [--root SPEC]... [--no-state] [--max-content BYTES]
+  spoor scrub                             forget stored bodies that look secret, then gc
   spoor roots | gc | version
 
 Root specs: PATH[:DEPTH[:content|meta]]   e.g. --root ~/.config:3 --root /Applications:1:meta
@@ -162,7 +164,7 @@ func init() {
 		"init": cmdInit, "roots": cmdRoots, "snap": cmdSnap, "run": cmdRun, "status": cmdStatus,
 		"log": cmdLog, "show": cmdShow, "diff": cmdDiff, "review": cmdReview, "blame": cmdBlame,
 		"revert": cmdRevert, "restore": cmdRestore, "note": cmdNote, "explain": cmdExplain,
-		"quickfix": cmdQuickfix, "export": cmdExport, "try": cmdTry, "gc": cmdGC, "upgrade": cmdUpgrade,
+		"quickfix": cmdQuickfix, "export": cmdExport, "try": cmdTry, "gc": cmdGC, "upgrade": cmdUpgrade, "scrub": cmdScrub,
 	}
 }
 
@@ -616,7 +618,7 @@ func cmdRevert(a *app.App, args []string) (int, error) {
 	}
 	if *script != "" {
 		c, _ := a.St.Resolve(pos[0])
-		if err := os.WriteFile(*script, []byte(revert.Script(a.St, res.Plan, "undo "+c.ID+": "+c.Message)), 0o700); err != nil {
+		if err := store.WriteFileAtomic(*script, []byte(revert.Script(a.St, res.Plan, "undo "+c.ID+": "+c.Message)), 0o700); err != nil {
 			return 1, err
 		}
 		fmt.Fprintf(a.Out, "wrote %s\n", *script)
@@ -767,7 +769,7 @@ func cmdQuickfix(a *app.App, args []string) (int, error) {
 		fmt.Fprint(a.Out, qf)
 		return 0, nil
 	}
-	return 0, os.WriteFile(*out, []byte(qf), 0o600)
+	return 0, store.WriteFileAtomic(*out, []byte(qf), 0o600)
 }
 
 func cmdExport(a *app.App, args []string) (int, error) {
@@ -805,7 +807,7 @@ func cmdExport(a *app.App, args []string) (int, error) {
 		fmt.Fprint(a.Out, text)
 		return 0, nil
 	}
-	return 0, os.WriteFile(*out, []byte(text), 0o600)
+	return 0, store.WriteFileAtomic(*out, []byte(text), 0o600)
 }
 
 func cmdTry(a *app.App, args []string) (int, error) {
@@ -866,6 +868,17 @@ func cmdTry(a *app.App, args []string) (int, error) {
 	a.PrintChanges(a.Err, items, false, nil)
 	fmt.Fprintf(a.Err, "\n  inspect: spoor review %s    keep: spoor try apply %s    drop: spoor try discard %s\n", c.ID, c.ID, c.ID)
 	return exit, offerReview(a, c.ID, *review, *noReview, items)
+}
+
+func cmdScrub(a *app.App, args []string) (int, error) {
+	n, err := a.St.Scrub(func(path string, body []byte) bool {
+		return scan.Sensitive(path) || redact.ContainsSecret(body)
+	})
+	if err != nil {
+		return 1, err
+	}
+	fmt.Fprintf(a.Out, "scrubbed %d stored bodies that look secret (history keeps their hashes)\n", n)
+	return cmdGC(a, nil)
 }
 
 func cmdGC(a *app.App, args []string) (int, error) {

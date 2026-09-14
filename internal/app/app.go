@@ -20,6 +20,7 @@ import (
 	"github.com/morass/spoor/internal/kb"
 	"github.com/morass/spoor/internal/model"
 	"github.com/morass/spoor/internal/profile"
+	"github.com/morass/spoor/internal/redact"
 	"github.com/morass/spoor/internal/revert"
 	"github.com/morass/spoor/internal/scan"
 	"github.com/morass/spoor/internal/store"
@@ -222,12 +223,15 @@ func (a *App) Run(o RunOptions) (*model.Commit, int, error) {
 		return nil, exit, err
 	}
 	a.warn(ws)
-	msg := o.Message
+	// Command lines routinely carry credentials (--token X); they are kept
+	// only in redacted form.
+	command := redact.Argv(o.Argv)
+	msg, _ := redact.Text(o.Message, "")
 	if msg == "" {
-		msg = strings.Join(o.Argv, " ")
+		msg = strings.Join(command, " ")
 	}
 	c := a.newCommit(model.KindRun, msg, pre, post)
-	c.Command, c.Cwd, c.ExitCode, c.Duration = o.Argv, cwd, exit, dur.Seconds()
+	c.Command, c.Cwd, c.ExitCode, c.Duration = command, cwd, exit, dur.Seconds()
 	c.Traced = ts != nil
 	if writers != nil {
 		if err := a.St.SaveTrace(c.ID, writers); err != nil {
@@ -372,7 +376,7 @@ func (a *App) Revert(ref string, opt revert.Options, apply bool) (*RevertResult,
 	if err != nil {
 		return nil, err
 	}
-	opt.Home, opt.GOOS, opt.Since = a.Home, a.GOOS, post.Created
+	opt.Home, opt.GOOS, opt.Since, opt.Roots = a.Home, a.GOOS, post.Created, post.Roots
 	plan := revert.Plan(a.St, changes, opt)
 	res := &RevertResult{Plan: plan}
 	if !apply {
@@ -426,18 +430,18 @@ func (a *App) RestorePlan(path, ref string, before bool) ([]revert.Action, *mode
 		}
 		switch e.Type {
 		case model.Dir:
-			return []revert.Action{{Op: revert.Mkdir, Path: path, Mode: e.Mode}}, c, m, nil
+			return revert.Guard([]revert.Action{{Op: revert.Mkdir, Path: path, Mode: e.Mode}}, m.Roots), c, m, nil
 		case model.Symlink:
-			return []revert.Action{{Op: revert.Restore, Path: path, Link: e.Link}}, c, m, nil
+			return revert.Guard([]revert.Action{{Op: revert.Restore, Path: path, Link: e.Link}}, m.Roots), c, m, nil
 		case model.File:
 			if !e.Stored {
 				return nil, c, m, fmt.Errorf("%s: content was not captured in %s (%s)", path, c.ID, e.Skipped)
 			}
-			return []revert.Action{{Op: revert.Restore, Path: path, Hash: e.Hash, Mode: e.Mode}}, c, m, nil
+			return revert.Guard([]revert.Action{{Op: revert.Restore, Path: path, Hash: e.Hash, Mode: e.Mode}}, m.Roots), c, m, nil
 		}
 	}
 	if profile.CoveredBy(m.Roots, path) {
-		return []revert.Action{{Op: revert.Delete, Path: path, Reason: "did not exist then"}}, c, m, nil
+		return revert.Guard([]revert.Action{{Op: revert.Delete, Path: path, Reason: "did not exist then"}}, m.Roots), c, m, nil
 	}
 	return nil, c, m, fmt.Errorf("%s is not inside any watched root of %s", path, c.ID)
 }

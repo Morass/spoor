@@ -60,3 +60,26 @@ func TestPutFileMatchesContentHash(t *testing.T) {
 		t.Errorf("object content %q", b)
 	}
 }
+
+func TestScrubDropsSecretBodies(t *testing.T) {
+	st, _ := Open(t.TempDir())
+	secret, _ := st.PutBytes([]byte("SECRET-BODY"))
+	plain, _ := st.PutBytes([]byte("plain"))
+	m := &model.Manifest{ID: "m1", Entries: []model.Entry{
+		{Path: "/h/a", Type: model.File, Hash: secret, Stored: true},
+		{Path: "/h/b", Type: model.File, Hash: plain, Stored: true},
+	}}
+	st.SaveManifest(m)
+	n, err := st.Scrub(func(p string, b []byte) bool { return string(b) == "SECRET-BODY" })
+	if err != nil || n != 1 {
+		t.Fatalf("scrub n=%d err=%v", n, err)
+	}
+	got, _ := st.LoadManifest("m1")
+	if got.Entries[0].Stored || got.Entries[0].Hash != secret || !got.Entries[1].Stored {
+		t.Errorf("entries after scrub: %+v", got.Entries)
+	}
+	st.GC()
+	if st.HasObject(secret) || !st.HasObject(plain) {
+		t.Error("gc after scrub should delete only the secret object")
+	}
+}

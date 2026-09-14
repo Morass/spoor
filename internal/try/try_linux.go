@@ -194,8 +194,29 @@ func OpaqueRemovals(c Change) []string {
 	return gone
 }
 
-// Apply copies the upper layers onto the real roots.
-func Apply(spec Spec, changes []Change) error {
+// Apply copies the upper layers onto the real roots. mayRemove is asked
+// about every real path the try would delete; the whole apply is refused
+// before anything is touched if any answer is no (the path changed or
+// appeared after the try was reviewed).
+func Apply(spec Spec, changes []Change, mayRemove func(string) bool) error {
+	var stale []string
+	for _, c := range changes {
+		switch c.Kind {
+		case Removed:
+			if _, err := os.Lstat(c.Path); err == nil && !mayRemove(c.Path) {
+				stale = append(stale, c.Path)
+			}
+		case Opaque:
+			for _, g := range OpaqueRemovals(c) {
+				if !mayRemove(g) {
+					stale = append(stale, g)
+				}
+			}
+		}
+	}
+	if len(stale) > 0 {
+		return fmt.Errorf("these paths changed or appeared after the try; nothing applied (use --force to overwrite): %s", strings.Join(stale, ", "))
+	}
 	sort.SliceStable(changes, func(i, j int) bool {
 		ri, rj := rank(changes[i]), rank(changes[j])
 		if ri != rj {
@@ -225,7 +246,10 @@ func Apply(spec Spec, changes []Change) error {
 				if err != nil {
 					return err
 				}
-				if err := os.MkdirAll(c.Path, fi.Mode().Perm()); err != nil {
+				if err := os.MkdirAll(c.Path, 0o700); err != nil {
+					return err
+				}
+				if err := keepOwnerAndMode(c.Path, fi); err != nil {
 					return err
 				}
 				continue
@@ -249,6 +273,24 @@ func rank(c Change) int {
 	return 2
 }
 
+const specialBits = fs.ModePerm | fs.ModeSetuid | fs.ModeSetgid | fs.ModeSticky
+
+// keepOwnerAndMode gives dst the mode (including setuid/setgid/sticky) and,
+// when running as root, the owner of the entry described by fi.
+func keepOwnerAndMode(dst string, fi fs.FileInfo) error {
+	if os.Geteuid() == 0 {
+		if st, ok := fi.Sys().(*syscall.Stat_t); ok {
+			if err := os.Lchown(dst, int(st.Uid), int(st.Gid)); err != nil {
+				return err
+			}
+		}
+	}
+	if fi.Mode()&fs.ModeSymlink != 0 {
+		return nil
+	}
+	return os.Chmod(dst, fi.Mode()&specialBits)
+}
+
 func copyEntry(src, dst string) error {
 	fi, err := os.Lstat(src)
 	if err != nil {
@@ -263,26 +305,35 @@ func copyEntry(src, dst string) error {
 			return err
 		}
 		os.Remove(dst)
-		return os.Symlink(t, dst)
+		if err := os.Symlink(t, dst); err != nil {
+			return err
+		}
+		return keepOwnerAndMode(dst, fi)
 	}
 	in, err := os.Open(src)
 	if err != nil {
 		return err
 	}
 	defer in.Close()
-	tmp := dst + ".spoor-try-tmp"
-	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, fi.Mode().Perm())
+	// A fresh, exclusively created temp file: a pre-placed file or symlink
+	// with a predictable name can never be opened and truncated.
+	out, err := os.CreateTemp(filepath.Dir(dst), ".spoor-try-*")
 	if err != nil {
 		return err
 	}
+	tmp := out.Name()
 	if _, err := io.Copy(out, in); err != nil {
 		out.Close()
 		os.Remove(tmp)
 		return err
 	}
 	if err := out.Close(); err != nil {
+		os.Remove(tmp)
 		return err
 	}
-	os.Chmod(tmp, fi.Mode().Perm())
+	if err := keepOwnerAndMode(tmp, fi); err != nil {
+		os.Remove(tmp)
+		return err
+	}
 	return os.Rename(tmp, dst)
 }

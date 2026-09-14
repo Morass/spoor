@@ -155,7 +155,7 @@ func HashFile(path string) (string, error) {
 }
 
 func copyFile(src, dst string) error {
-	in, err := os.Open(src)
+	in, err := openNoFollow(src)
 	if err != nil {
 		return err
 	}
@@ -396,6 +396,10 @@ func (s *Store) SaveConfig(c *Config) error {
 
 // GC deletes objects no manifest references. Returns objects and bytes freed.
 func (s *Store) GC() (int, int64, error) {
+	if err := s.Lock(); err != nil {
+		return 0, 0, err
+	}
+	defer s.Unlock()
 	keep := map[string]bool{}
 	ents, err := os.ReadDir(filepath.Join(s.Root, "manifests"))
 	if err != nil {

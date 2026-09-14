@@ -99,9 +99,10 @@ type Model struct {
 }
 
 type execDoneMsg struct {
-	path string
-	err  error
-	what string
+	path    string
+	err     error
+	what    string
+	cleanup string
 }
 type revertDoneMsg struct {
 	results []revert.Result
@@ -495,10 +496,10 @@ func diffTool() []string {
 		return strings.Fields(t)
 	}
 	if _, err := exec.LookPath("vimdiff"); err == nil {
-		return []string{"vimdiff"}
+		return []string{"vimdiff", "-n", "-i", "NONE"}
 	}
 	if _, err := exec.LookPath("nvim"); err == nil {
-		return []string{"nvim", "-d"}
+		return []string{"nvim", "-d", "-n", "-i", "NONE"}
 	}
 	return nil
 }
@@ -513,32 +514,35 @@ func vimTool() string {
 	return ""
 }
 
-func (m *Model) tmpFile(name string, body []byte) (string, error) {
-	dir := filepath.Join(m.app.St.Root, "tmp", "view-"+store.NewID())
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", err
-	}
-	p := filepath.Join(dir, name)
-	return p, os.WriteFile(p, body, 0o600)
-}
-
 func (m *Model) vimdiffCmd(it *app.Item) (tea.Cmd, string) {
 	tool := diffTool()
 	if tool == nil {
 		return nil, "no vimdiff or nvim found — the built-in diff pane is all there is"
 	}
 	base := filepath.Base(it.Path)
-	b, _ := diff.Content(m.app.St, it.Before, false)
-	a, _ := diff.Content(m.app.St, it.After, m.live)
+	b, whyB := diff.Content(m.app.St, it.Before, false)
+	a, whyA := diff.Content(m.app.St, it.After, m.live)
+	for _, why := range []string{whyB, whyA} {
+		if strings.HasPrefix(why, "not shown") {
+			return nil, why
+		}
+	}
 	afterPlist := diff.IsPlist(a)
 	bt, bok := diff.Readable(b)
 	at, aok := diff.Readable(a)
 	if (b != nil && !bok) || (a != nil && !aok) {
 		return nil, "binary content: nothing a text diff tool can show"
 	}
-	b, a = []byte(bt), []byte(at)
-	before, err := m.tmpFile(base+".before", b)
+	// Copies live in a private folder that is deleted as soon as the diff
+	// tool exits (execDoneMsg), and vim is told not to keep swap or
+	// history files about them.
+	dir, err := os.MkdirTemp(filepath.Join(m.app.St.Root, "tmp"), "view-")
 	if err != nil {
+		return nil, err.Error()
+	}
+	before := filepath.Join(dir, base+".before")
+	if err := os.WriteFile(before, []byte(bt), 0o600); err != nil {
+		os.RemoveAll(dir)
 		return nil, err.Error()
 	}
 	after := ""
@@ -548,12 +552,16 @@ func (m *Model) vimdiffCmd(it *app.Item) (tea.Cmd, string) {
 		}
 	}
 	if after == "" {
-		if after, err = m.tmpFile(base+".after", a); err != nil {
+		after = filepath.Join(dir, base+".after")
+		if err := os.WriteFile(after, []byte(at), 0o600); err != nil {
+			os.RemoveAll(dir)
 			return nil, err.Error()
 		}
 	}
 	c := exec.Command(tool[0], append(tool[1:], before, after)...)
-	return tea.ExecProcess(c, func(err error) tea.Msg { return execDoneMsg{path: it.Path, err: err, what: "diff tool"} }), ""
+	return tea.ExecProcess(c, func(err error) tea.Msg {
+		return execDoneMsg{path: it.Path, err: err, what: "diff tool", cleanup: dir}
+	}), ""
 }
 
 func (m *Model) visibleChanges(onlyMarked bool) []model.Change {
@@ -612,7 +620,7 @@ func (m *Model) startRevert() {
 		return
 	}
 	paths := m.targetPaths()
-	plan := revert.Plan(m.app.St, m.allChanges(), revert.Options{Paths: paths, Home: m.app.Home, GOOS: m.app.GOOS, Since: m.postTime})
+	plan := revert.Plan(m.app.St, m.allChanges(), revert.Options{Paths: paths, Home: m.app.Home, GOOS: m.app.GOOS, Since: m.postTime, Roots: m.postRoots})
 	var body []string
 	exec := 0
 	for _, a := range plan {
@@ -661,6 +669,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.resize()
 		return m, nil
 	case execDoneMsg:
+		if msg.cleanup != "" {
+			os.RemoveAll(msg.cleanup)
+		}
 		delete(m.diffCache, msg.path)
 		delete(m.detCache, msg.path)
 		m.status = msg.what + " closed"
@@ -1032,7 +1043,7 @@ func (m *Model) reviewKey(s string) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		p := m.exportPath(".qf")
-		if err := os.WriteFile(p, []byte(qf), 0o600); err != nil {
+		if err := store.WriteFileAtomic(p, []byte(qf), 0o600); err != nil {
 			m.status = err.Error()
 			return m, nil
 		}
@@ -1052,14 +1063,14 @@ func (m *Model) reviewKey(s string) (tea.Model, tea.Cmd) {
 			paths[p] = true
 		}
 		var opt revert.Options
-		opt.Home, opt.GOOS, opt.Since = m.app.Home, m.app.GOOS, m.postTime
+		opt.Home, opt.GOOS, opt.Since, opt.Roots = m.app.Home, m.app.GOOS, m.postTime, m.postRoots
 		if len(paths) > 0 {
 			opt.Paths = paths
 		}
 		plan := revert.Plan(m.app.St, m.allChanges(), opt)
 		p := m.exportPath("-undo.sh")
 		script := revert.Script(m.app.St, plan, "undo "+m.commit.ID+": "+m.commit.Message)
-		if err := os.WriteFile(p, []byte(script), 0o700); err != nil {
+		if err := store.WriteFileAtomic(p, []byte(script), 0o700); err != nil {
 			m.status = err.Error()
 		} else {
 			m.status = fmt.Sprintf("undo script (%d actions) written: %s", len(plan), m.app.Tilde(p))

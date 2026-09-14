@@ -48,6 +48,10 @@ type Action struct {
 	Label  string `json:"label,omitempty"`
 	Domain string `json:"domain,omitempty"`
 	Reason string `json:"reason,omitempty"`
+	// Root is the watched root the path lies under; Expect is the path's
+	// fingerprint when the plan was made (see guard.go).
+	Root   string `json:"root,omitempty"`
+	Expect string `json:"expect,omitempty"`
 }
 
 // Executes reports whether the action changes the machine.
@@ -65,6 +69,9 @@ type Options struct {
 	// directory is removed as a whole tree only if nothing inside it was
 	// modified after this moment (its deeper contents were never scanned).
 	Since time.Time
+	// Roots are the watched roots of the commit, used to refuse paths whose
+	// parent folders were swapped for symlinks.
+	Roots []model.Root
 }
 
 // wants decides whether a change is part of the undo. By default noise is
@@ -113,14 +120,14 @@ func Plan(st *store.Store, changes []model.Change, opt Options) []Action {
 		}
 		di, dj := strings.Count(acts[i].Path, "/"), strings.Count(acts[j].Path, "/")
 		switch acts[i].Op {
-		case Delete, Rmdir:
+		case Delete, Rmdir, DeleteTree:
 			return di > dj // children before parents
 		case Mkdir, Restore:
 			return di < dj // parents before children
 		}
 		return false
 	})
-	return acts
+	return Guard(acts, opt.Roots)
 }
 
 func dedupeBootouts(acts *[]Action) {
@@ -211,20 +218,21 @@ func treeAction(p string, opt Options) Action {
 	}
 	n := 0
 	newer := ""
-	limit := opt.Since.Add(2 * time.Second)
+	// Anything created, moved in or re-permissioned after the commit was
+	// recorded has a later ctime, which (unlike mtime) cannot be preserved
+	// or forged by cp -p or touch. An unreadable subtree is treated the
+	// same way: what cannot be inspected is not deleted without --force.
 	filepath.WalkDir(p, func(q string, d fs.DirEntry, err error) error {
 		if err != nil {
+			if newer == "" {
+				newer = q + " (unreadable)"
+			}
 			return nil
 		}
 		n++
-		if !opt.Since.IsZero() && newer == "" {
-			if fi, err := d.Info(); err == nil && fi.ModTime().After(limit) {
-				if q == p && !fi.IsDir() {
-					return nil
-				}
-				if !fi.IsDir() {
-					newer = q
-				}
+		if newer == "" && !opt.Since.IsZero() {
+			if fi, err := d.Info(); err != nil || changed(fi).After(opt.Since) {
+				newer = q
 			}
 		}
 		return nil
@@ -411,8 +419,32 @@ type Result struct {
 // Apply executes the plan. Non-executing actions are passed through.
 func Apply(st *store.Store, acts []Action) []Result {
 	var out []Result
+	touched := map[string]bool{}
 	for _, a := range acts {
 		r := Result{Action: a}
+		if touchesFiles(a.Op) {
+			if err := safeParents(a.Root, a.Path); err != nil {
+				r.Err = err
+				out = append(out, r)
+				continue
+			}
+			// A removal whose target is already gone (an enclosing tree was
+			// removed first) has nothing left to protect.
+			if (a.Op == Delete || a.Op == DeleteTree || a.Op == Rmdir) && fingerprint(a.Path) == "absent" {
+				r.Note = "already gone"
+				touched[a.Path] = true
+				out = append(out, r)
+				continue
+			}
+			// Only the first action on a path sees the planned state: a
+			// type change deletes and then restores the same path.
+			if !touched[a.Path] && a.Expect != "" && fingerprint(a.Path) != a.Expect {
+				r.Err = fmt.Errorf("%s changed after the plan was made; nothing done (plan again)", a.Path)
+				out = append(out, r)
+				continue
+			}
+			touched[a.Path] = true
+		}
 		switch a.Op {
 		case Bootout:
 			err := launchctl("bootout", a.Domain+"/"+a.Label)
@@ -435,11 +467,17 @@ func Apply(st *store.Store, acts []Action) []Result {
 				r.Note = "left in place: not empty"
 			}
 		case Mkdir:
-			r.Err = os.MkdirAll(a.Path, os.FileMode(a.Mode&0o7777|0o700))
+			if r.Err = os.MkdirAll(a.Path, 0o700); r.Err == nil {
+				r.Err = os.Chmod(a.Path, fileMode(a.Mode)|0o700)
+			}
 		case Restore:
 			r.Err = restore(st, a)
 		case Chmod:
-			r.Err = os.Chmod(a.Path, os.FileMode(a.Mode&0o7777))
+			if fi, err := os.Lstat(a.Path); err == nil && fi.Mode()&fs.ModeSymlink != 0 {
+				r.Err = fmt.Errorf("refusing to chmod through a symlink: %s", a.Path)
+			} else {
+				r.Err = os.Chmod(a.Path, fileMode(a.Mode))
+			}
 		case Crontab:
 			r.Err = crontab(st, a)
 		}
@@ -460,11 +498,20 @@ func restore(st *store.Store, a Action) error {
 	if err != nil {
 		return fmt.Errorf("stored content missing (was the repository gc'd?): %w", err)
 	}
-	tmp := filepath.Join(filepath.Dir(a.Path), ".spoor-restore-"+store.NewID())
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+	f, err := os.CreateTemp(filepath.Dir(a.Path), ".spoor-restore-*")
+	if err != nil {
 		return err
 	}
-	if err := os.Chmod(tmp, os.FileMode(a.Mode&0o7777)); err != nil {
+	tmp := f.Name()
+	_, werr := f.Write(b)
+	if cerr := f.Close(); werr == nil {
+		werr = cerr
+	}
+	if werr != nil {
+		os.Remove(tmp)
+		return werr
+	}
+	if err := os.Chmod(tmp, fileMode(a.Mode)); err != nil {
 		os.Remove(tmp)
 		return err
 	}
@@ -478,7 +525,7 @@ func restore(st *store.Store, a Action) error {
 // Script renders the plan as a POSIX shell script a human can read and run.
 func Script(st *store.Store, acts []Action, title string) string {
 	var sb strings.Builder
-	sb.WriteString("#!/bin/sh\n# " + title + "\n# Generated by spoor. Read before running.\nset -u\n\n")
+	sb.WriteString("#!/bin/sh\n# " + comment(title) + "\n# Generated by spoor. Read before running.\nset -u\n\n")
 	for _, a := range acts {
 		q := shq(a.Path)
 		switch a.Op {
@@ -498,10 +545,14 @@ func Script(st *store.Store, acts []Action, title string) string {
 			if a.Link != "" {
 				fmt.Fprintf(&sb, "ln -sfn -- %s %s\n", shq(a.Link), q)
 			} else {
-				fmt.Fprintf(&sb, "mkdir -p -- %s && cp -- %s %s && chmod %o %s\n", shq(filepath.Dir(a.Path)), shq(st.ObjectPath(a.Hash)), q, a.Mode&0o7777, q)
+				// Copy to a fresh temp file and rename over the target, so
+				// a symlink placed at the target is replaced, not followed.
+				d := shq(filepath.Dir(a.Path))
+				fmt.Fprintf(&sb, "mkdir -p -- %s && t=$(mktemp %s) && cp -- %s \"$t\" && chmod %s \"$t\" && mv -f -- \"$t\" %s\n",
+					d, shq(filepath.Join(filepath.Dir(a.Path), ".spoor-restore-XXXXXX")), shq(st.ObjectPath(a.Hash)), octal(a.Mode), q)
 			}
 		case Chmod:
-			fmt.Fprintf(&sb, "chmod %o %s\n", a.Mode&0o7777, q)
+			fmt.Fprintf(&sb, "[ -L %s ] || chmod %s %s\n", q, octal(a.Mode), q)
 		case Crontab:
 			if a.Hash == "" {
 				sb.WriteString("crontab -r\n")
@@ -509,7 +560,7 @@ func Script(st *store.Store, acts []Action, title string) string {
 				fmt.Fprintf(&sb, "crontab %s\n", shq(st.ObjectPath(a.Hash)))
 			}
 		default:
-			fmt.Fprintf(&sb, "# %s %s: %s\n", a.Op, a.Path, a.Reason)
+			fmt.Fprintf(&sb, "# %s\n", comment(fmt.Sprintf("%s %s: %s", a.Op, a.Path, a.Reason)))
 		}
 	}
 	return sb.String()

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/morass/spoor/internal/model"
+	"github.com/morass/spoor/internal/redact"
 	"github.com/morass/spoor/internal/store"
 )
 
@@ -42,10 +43,32 @@ type Result struct {
 	Warnings []string
 }
 
-var sensitive = regexp.MustCompile(`(?i)(/\.ssh/id_[^/]*$|/\.ssh/.*_key$|\.pem$|\.key$|\.p12$|\.pfx$|/\.netrc$|/\.pgpass$|/\.gnupg/|/credentials(\.json)?$|\.keychain(-db)?$|/\.aws/|/\.docker/config\.json$|/\.kube/config$|/secrets?(\.|/|$)|token)`)
+// File names whose bodies are credentials, keys or private history.
+var sensitiveName = regexp.MustCompile(`(?i)^(id_[^/]*|.*_key|.*\.(pem|key|p8|p12|pfx|jks|keystore|kdbx|keychain|keychain-db|gpg|asc|age|ovpn)|\.netrc|\.pgpass|\.my\.cnf|\.npmrc|\.yarnrc(\.yml)?|\.pypirc|\.git-credentials|\.gem-credentials|\.env(\..*)?|\.envrc|\.vault-token|\.s3cfg|\.boto|\.?secrets?(\..*)?|credentials(\..*)?|.*token.*|.*passw(or)?d.*|shadow-?|gshadow-?|master\.key|\.htpasswd|.*_history|\.viminfo|\.lesshst|hosts\.ya?ml|application_default_credentials\.json|access_tokens\.db|credentials\.db|keys\.txt|rclone\.conf)$`)
 
-// Sensitive reports whether a path's body must never be copied into the store.
-func Sensitive(path string) bool { return sensitive.MatchString(path) }
+// Folders whose every file is treated as secret.
+var sensitiveDir = regexp.MustCompile(`(?i)/(\.ssh|\.gnupg|\.aws|\.azure|\.kube|\.docker|\.password-store|\.config/gh|\.config/gcloud|\.config/op|\.config/rclone|\.config/sops|\.config/doctl|\.config/configstore|\.terraform\.d|\.local/share/keyrings|Library/Keychains|etc/ssl/private)/`)
+
+// Sensitive reports whether a path's body must never be copied into the
+// store. It looks at the file NAME and at a list of known credential
+// folders, never at arbitrary directory names (a folder called "secret"
+// does not make its children secret). Content is checked separately.
+func Sensitive(path string) bool {
+	base := filepath.Base(path)
+	if sensitiveName.MatchString(base) {
+		return true
+	}
+	if strings.HasPrefix(path, "/etc/ssh/ssh_host_") && !strings.HasSuffix(base, ".pub") {
+		return true
+	}
+	if sensitiveDir.MatchString(path) {
+		if strings.Contains(path, "/.ssh/") && (base == "config" || strings.HasPrefix(base, "known_hosts") || strings.HasPrefix(base, "authorized_keys") || strings.HasSuffix(base, ".pub")) {
+			return false
+		}
+		return true
+	}
+	return false
+}
 
 func Scan(opt Options) (*Result, error) {
 	if opt.MaxContent == 0 {
@@ -76,11 +99,14 @@ func Scan(opt Options) (*Result, error) {
 			}
 			e := model.Entry{Path: model.StatePrefix + c.name, Type: model.State, Size: int64(len(text))}
 			e.Hash = store.HashBytes([]byte(text))
-			if opt.Store != nil {
+			switch {
+			case redact.ContainsSecret([]byte(text)):
+				e.Skipped = "sensitive" // e.g. a crontab line carrying a token
+			case opt.Store != nil:
 				if _, err := opt.Store.PutBytes([]byte(text)); err == nil {
 					e.Stored = true
 				}
-			} else {
+			default:
 				e.Stored = true // content is reproducible from the live query
 			}
 			s.add(e, true)
@@ -214,7 +240,7 @@ func (s *scanner) fileContent(root model.Root, e *model.Entry) {
 	}
 	sens := Sensitive(e.Path)
 	if pe, ok := s.prev[e.Path]; ok && pe.Type == model.File && pe.Size == e.Size && pe.MTime == e.MTime && pe.Mode == e.Mode && pe.Hash != "" {
-		if sens || (pe.Stored && (s.opt.Store == nil || s.opt.HashOnly || s.opt.Store.HasObject(pe.Hash))) {
+		if sens || strings.HasPrefix(pe.Skipped, "sensitive") || (pe.Stored && (s.opt.Store == nil || s.opt.HashOnly || s.opt.Store.HasObject(pe.Hash))) {
 			e.Hash, e.Stored, e.Skipped = pe.Hash, pe.Stored, pe.Skipped
 			return
 		}
@@ -233,12 +259,15 @@ func (s *scanner) fileContent(root model.Root, e *model.Entry) {
 		}
 		return
 	}
-	h, err := s.opt.Store.PutFile(e.Path)
+	h, stored, err := s.opt.Store.PutFileFiltered(e.Path, redact.ContainsSecret)
 	if err != nil {
 		e.Skipped = "unreadable"
 		return
 	}
-	e.Hash, e.Stored = h, true
+	e.Hash, e.Stored = h, stored
+	if !stored {
+		e.Skipped = "sensitive content"
+	}
 }
 
 // EntryFor records one path (optionally reading it from src instead) as a
@@ -269,10 +298,10 @@ func EntryFor(st *store.Store, path, src string, content bool, maxContent int64)
 			}
 			e.Skipped = "sensitive"
 		default:
-			if h, err := st.PutFile(src); err == nil {
-				e.Hash, e.Stored = h, true
-			} else {
+			if h, stored, err := st.PutFileFiltered(src, redact.ContainsSecret); err != nil {
 				e.Skipped = "unreadable"
+			} else if e.Hash, e.Stored = h, stored; !stored {
+				e.Skipped = "sensitive content"
 			}
 		}
 	case fi.IsDir():

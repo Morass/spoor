@@ -211,11 +211,15 @@ type FootprintChange struct {
 func (a *App) Export(c *model.Commit, changes []model.Change, doRedact bool) *Footprint {
 	fp := &Footprint{Tool: "spoor", Message: c.Message, Time: c.Time, ExitCode: c.ExitCode}
 	fp.OS = a.GOOS
+	home := a.Home
+	if post, err := a.St.LoadManifest(c.Post); err == nil && post.Home != "" {
+		home = post.Home
+	}
 	clean := func(s string) string {
 		if !doRedact {
 			return s
 		}
-		out, n := redact.Text(s)
+		out, n := redact.Text(s, home)
 		fp.Redacted += n
 		return out
 	}
@@ -237,11 +241,13 @@ func (a *App) Export(c *model.Commit, changes []model.Change, doRedact bool) *Fo
 				break
 			}
 			if u := diff.Unified(a.St, it.Change, false); u != "" {
-				ls := strings.Split(u, "\n")
+				// Redact the whole diff first: cutting it could separate a
+				// private key from the delimiter the redactor matches on.
+				ls := strings.Split(clean(u), "\n")
 				if len(ls) > 120 {
 					ls = append(ls[:120], fmt.Sprintf("… %d more lines", len(ls)-120))
 				}
-				fc.Diff = clean(strings.Join(ls, "\n"))
+				fc.Diff = strings.Join(ls, "\n")
 			}
 		}
 		fp.Changes = append(fp.Changes, fc)

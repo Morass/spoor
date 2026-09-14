@@ -51,6 +51,18 @@ func cmdUpgrade(a *app.App, args []string) (int, error) {
 	if err != nil {
 		return 1, err
 	}
+	// Names come from brew's JSON; they are passed to brew as separate
+	// arguments (never through a shell), and anything that is not a
+	// well-formed formula name is dropped.
+	valid := outdated[:0]
+	for _, o := range outdated {
+		if brew.Name.MatchString(o.Name) {
+			valid = append(valid, o)
+		} else {
+			fmt.Fprintf(a.Err, "spoor: ignoring malformed formula name from brew: %q\n", o.Name)
+		}
+	}
+	outdated = valid
 	byName := map[string]brew.Outdated{}
 	for _, o := range outdated {
 		byName[o.Name] = o
@@ -187,25 +199,32 @@ func cmdUpgrade(a *app.App, args []string) (int, error) {
 	for _, k := range keys {
 		roots = append(roots, model.Root{Path: b.Folder(k), Depth: -1, Content: true})
 	}
-	var script []string
+	var runs [][]string
 	if len(upgrades) > 0 {
-		script = append(script, `"$0" upgrade --formula `+strings.Join(upgrades, " "))
+		runs = append(runs, append([]string{b.Path, "upgrade", "--formula"}, upgrades...))
 	}
 	if len(installs) > 0 {
-		script = append(script, `"$0" install --formula `+strings.Join(installs, " "))
-	}
-	argv := []string{"/bin/sh", "-c", strings.Join(script, " && "), b.Path}
-	if *msg == "" {
-		all := append(append([]string{}, upgrades...), installs...)
-		*msg = "brew upgrade " + strings.Join(all, " ")
-		if len(names) == 0 {
-			*msg = fmt.Sprintf("brew upgrade (all %d outdated)", len(upgrades))
-		}
+		runs = append(runs, append([]string{b.Path, "install", "--formula"}, installs...))
 	}
 	os.Setenv("HOMEBREW_NO_AUTO_UPDATE", "1")
-	c, exit, err := a.Run(app.RunOptions{Roots: app.MergeRoots(a.Roots(nil), roots), State: a.State(false), Message: *msg, Argv: argv})
-	if err != nil {
-		return max(exit, 1), err
+	var c *model.Commit
+	exit := 0
+	for _, argv := range runs {
+		m := *msg
+		if m == "" {
+			m = "brew " + strings.Join(argv[1:2], "") + " " + strings.Join(argv[3:], " ")
+			if len(names) == 0 && argv[1] == "upgrade" {
+				m = fmt.Sprintf("brew upgrade (all %d outdated)", len(upgrades))
+			}
+		}
+		var err error
+		c, exit, err = a.Run(app.RunOptions{Roots: app.MergeRoots(a.Roots(nil), roots), State: a.State(false), Message: m, Argv: argv})
+		if err != nil {
+			return max(exit, 1), err
+		}
+		if exit != 0 {
+			break
+		}
 	}
 	pre, post, changes, _ := a.CommitChanges(c)
 	items := a.View(pre, post, changes)
