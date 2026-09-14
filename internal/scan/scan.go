@@ -87,6 +87,14 @@ func Scan(opt Options) (*Result, error) {
 		}
 	}
 	sort.Slice(m.Entries, func(i, j int) bool { return m.Entries[i].Path < m.Entries[j].Path })
+	switch n := len(s.unreadable); {
+	case n > 0 && n <= 3:
+		for _, p := range s.unreadable {
+			s.warnings = append(s.warnings, "unreadable: "+p)
+		}
+	case n > 3:
+		s.warnings = append(s.warnings, fmt.Sprintf("%d paths unreadable without more privileges (e.g. %s)", n, strings.Join(s.unreadable[:3], ", ")))
+	}
 	if s.tcc > 0 {
 		s.warnings = append(s.warnings, fmt.Sprintf("%d folder(s) are protected by macOS privacy controls and were skipped (e.g. %s); grant your terminal Full Disk Access to watch them", s.tcc, s.tccFirst))
 	}
@@ -99,8 +107,9 @@ type scanner struct {
 	seen     map[string]int
 	m        *model.Manifest
 	warnings []string
-	tcc      int
-	tccFirst string
+	tcc        int
+	tccFirst   string
+	unreadable []string
 }
 
 func (s *scanner) warn(w string) {
@@ -150,7 +159,7 @@ func (s *scanner) permWarn(p string, err error) {
 		return
 	}
 	if errors.Is(err, fs.ErrPermission) || errors.Is(err, syscall.EPERM) {
-		s.warn("unreadable: " + p)
+		s.unreadable = append(s.unreadable, p)
 		return
 	}
 	s.warn(p + ": " + err.Error())

@@ -43,7 +43,9 @@ func Open(root string) (*App, error) {
 		return nil, err
 	}
 	home, _ := os.UserHomeDir()
-	return &App{St: st, Home: home, GOOS: runtime.GOOS, Out: os.Stdout, Err: os.Stderr}, nil
+	a := &App{St: st, Home: home, GOOS: runtime.GOOS, Out: os.Stdout, Err: os.Stderr}
+	diff.Label = a.Tilde
+	return a, nil
 }
 
 // Roots resolves the watch list: explicit override, then the

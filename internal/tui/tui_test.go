@@ -141,6 +141,19 @@ func TestReviewNavigateNoteRevert(t *testing.T) {
 	}
 }
 
+func TestBurstOfKeysIsSeveralCommands(t *testing.T) {
+	a, _, c := setup(t)
+	m, err := New(a, c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.Update(tea.WindowSizeMsg{Width: 150, Height: 40})
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("jxR")}) // one read from a fast terminal
+	if len(m.marks) != 1 || m.confirm == nil {
+		t.Fatalf("burst not split: marks=%v confirm=%v status=%q", m.marks, m.confirm != nil, m.status)
+	}
+}
+
 func TestLiveChangesScreen(t *testing.T) {
 	a, home, _ := setup(t)
 	os.WriteFile(filepath.Join(home, ".config/new.conf"), []byte("fresh\n"), 0o644)

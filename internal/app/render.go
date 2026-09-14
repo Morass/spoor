@@ -100,7 +100,11 @@ func (a *App) CommitLine(c *model.Commit) string {
 	if _, _, ch, err := a.CommitChanges(c); err == nil {
 		items = a.Items(ch)
 	}
-	counts := a.Count(items).String()
+	cnt := a.Count(items)
+	counts := cnt.String()
+	if cnt.Added+cnt.Removed+cnt.Modified+cnt.Other == 0 && cnt.Noise > 0 {
+		counts = fmt.Sprintf("(%d noise)", cnt.Noise)
+	}
 	msg := c.Message
 	if c.Kind == model.KindRun && c.ExitCode != 0 {
 		msg += fmt.Sprintf("  (exit %d)", c.ExitCode)

@@ -155,6 +155,9 @@ func detectRenames(cs []model.Change) []model.Change {
 	return out
 }
 
+// Label shortens paths in diff headers (the app sets it to ~-relative).
+var Label = func(p string) string { return p }
+
 // Content loads an entry's body: from the store when captured, or from
 // the live file when the manifest came from a hash-only scan (live=true).
 func Content(st *store.Store, e *model.Entry, live bool) ([]byte, string) {
@@ -248,7 +251,7 @@ func Unified(st *store.Store, c model.Change, live bool) string {
 	case before == nil && after == nil:
 	default:
 		if bt != at {
-			body = udiff.Unified("a"+old, "b"+name, bt, at)
+			body = udiff.Unified(Label(old)+" (before)", Label(name)+" (after)", bt, at)
 		}
 	}
 	out := strings.Join(head, "\n")

@@ -67,15 +67,18 @@ type Options struct {
 	Since time.Time
 }
 
-func (o Options) wants(path string) bool {
+// wants decides whether a change is part of the undo. By default noise is
+// left alone, except things the commit created (caches, logs): deleting
+// those is safe, while restoring an appended history file would lose data.
+func (o Options) wants(c model.Change) bool {
 	if o.Paths != nil {
-		return o.Paths[path]
+		return o.Paths[c.Path]
 	}
-	cat := kb.Classify(path, o.Home, o.GOOS).Category
+	cat := kb.Classify(c.Path, o.Home, o.GOOS).Category
 	if o.Categories != nil {
 		return o.Categories[cat]
 	}
-	return cat != kb.Noise
+	return cat != kb.Noise || c.Kind == model.Added
 }
 
 // Plan builds the actions that undo changes (the pre→post diff of a commit).
@@ -89,7 +92,7 @@ func Plan(st *store.Store, changes []model.Change, opt Options) []Action {
 	var acts []Action
 	labels := map[string]bool{}
 	for _, c := range changes {
-		if !opt.wants(c.Path) {
+		if !opt.wants(c) {
 			continue
 		}
 		if strings.HasPrefix(c.Path, model.StatePrefix) {

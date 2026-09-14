@@ -498,21 +498,19 @@ func (m *Model) vimdiffCmd(it *app.Item) (tea.Cmd, string) {
 	base := filepath.Base(it.Path)
 	b, _ := diff.Content(m.app.St, it.Before, false)
 	a, _ := diff.Content(m.app.St, it.After, m.live)
-	if diff.IsBinary(b) || diff.IsBinary(a) {
+	afterPlist := diff.IsPlist(a)
+	bt, bok := diff.Readable(b)
+	at, aok := diff.Readable(a)
+	if (b != nil && !bok) || (a != nil && !aok) {
 		return nil, "binary content: nothing a text diff tool can show"
 	}
-	if bt, ok := diff.Readable(b); ok {
-		b = []byte(bt)
-	}
-	if at, ok := diff.Readable(a); ok {
-		a = []byte(at)
-	}
+	b, a = []byte(bt), []byte(at)
 	before, err := m.tmpFile(base+".before", b)
 	if err != nil {
 		return nil, err.Error()
 	}
 	after := ""
-	if m.live && it.After != nil && it.After.Type == model.File && !diff.IsPlist(a) {
+	if m.live && it.After != nil && it.After.Type == model.File && !afterPlist {
 		if h, err := store.HashFile(it.Path); err == nil && h == it.After.Hash {
 			after = it.Path // edit the real file directly
 		}
@@ -688,6 +686,16 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	s := k.String()
 	if s == "ctrl+c" {
 		return m, tea.Quit
+	}
+	// Keys typed quickly (or sent by a script) can arrive as one message
+	// with several runes; outside text fields each rune is a command.
+	if k.Type == tea.KeyRunes && len(k.Runes) > 1 && !m.editing && !m.filtering {
+		var cmds []tea.Cmd
+		for _, r := range k.Runes {
+			_, c := m.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+			cmds = append(cmds, c)
+		}
+		return m, tea.Batch(cmds...)
 	}
 	if m.busy {
 		return m, nil
