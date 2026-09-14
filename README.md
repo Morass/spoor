@@ -1,245 +1,383 @@
 # spoor
 
-See what a command did to your machine, inspect every change, and undo any of it.
+**See what a command did to your machine. Inspect every change. Undo any of it.**
 
+<p align="center"><img src="docs/images/review.svg" alt="spoor review: an installer's changes grouped by risk, the decoded LaunchAgent diff, and what it means" width="900"></p>
+
+`curl … | sh`, `brew upgrade`, `npm i -g`, an app's "helper tool": each of them
+changes files you never look at. They add launch agents that start at login,
+append lines to your shell startup files, drop commands onto your `PATH` and
+write config into `~/.config`. spoor records those parts of the machine before
+and after, so you can see exactly what changed, why it matters and how to take
+it back.
+
+- **Record** any command, or just take snapshots now and then.
+- **Review** every change in a terminal UI, grouped by risk, with real diffs,
+  plain-language explanations and your own notes. Hand off to vim or vimdiff
+  whenever you like.
+- **Undo** a whole command or single files. Launch agents are unloaded,
+  anything you edited since is left alone, and every undo can itself be undone.
+- **Upgrade Homebrew packages** from a checklist, and read each upgrade as file
+  diffs: changelog, man page, shell integration.
+- **Keep history** of your machine: `log`, `diff` any two points, `blame` a
+  file, `restore` one from any point.
+
+It is a single Go binary for macOS and Linux with no runtime dependencies.
+
+> Screenshots come from `scripts/screenshots.sh`: the real binary driven in a
+> sandbox with a fictional installer and a simulated Homebrew.
+
+## Contents
+
+- [Install](#install)
+- [Quick start](#quick-start)
+- [A tour](#a-tour)
+  - [1. Record an installer](#1-record-an-installer)
+  - [2. Review what it did](#2-review-what-it-did)
+  - [3. Undo it](#3-undo-it)
+  - [4. Upgrade Homebrew packages](#4-upgrade-homebrew-packages)
+  - [5. History, blame and notes](#5-history-blame-and-notes)
+  - [6. Watch without running anything through spoor](#6-watch-without-running-anything-through-spoor)
+  - [7. Linux: try before you apply](#7-linux-try-before-you-apply)
+- [Getting help](#getting-help)
+- [Command reference](#command-reference)
+- [Review keys](#review-keys)
+- [How it works](#how-it-works)
+- [Undo: what spoor will and will not do](#undo-what-spoor-will-and-will-not-do)
+- [Privacy](#privacy)
+- [Limits](#limits)
+- [Development](#development)
+
+## Install
+
+With Go 1.26 or newer:
+
+```sh
+go install github.com/morass/spoor/cmd/spoor@latest
 ```
-spoor run -- sh -c "$(curl -fsSL https://example.com/install.sh)"
-spoor review            # interactive inspector
-spoor revert HEAD --apply
+
+Or from a checkout:
+
+```sh
+git clone https://github.com/morass/spoor
+cd spoor
+go build -o ~/.local/bin/spoor ./cmd/spoor
 ```
 
-spoor keeps its own **history of the parts of a system that installers
-touch**: launch agents and daemons, login items, shell startup files,
-commands on PATH, apps, config directories, crontab, loaded jobs,
-listening ports. Every `run`, `snap`, `revert` and `restore` is a commit.
-You can diff any two points, ask which commit put a file there, attach
-notes to changes, and undo a whole commit or single paths. Undo is itself
-a commit, so it can be undone too.
+Make sure the folder is on your `PATH`, for example
+`export PATH="$HOME/.local/bin:$PATH"` in `~/.zshrc` or `~/.bash_profile`.
 
-It is a single Go binary with no runtime dependencies. vim, `eslogger` and
-`strace` are used when present, never required.
-
-> Status: private work in progress. Not published.
+Optional helpers: `vim`/`nvim` for the diff and quickfix hand-off. `eslogger`
+(built into macOS 13+, needs root) or `strace` (Linux) for `--trace`.
 
 ## Quick start
 
 ```sh
-go build -o spoor ./cmd/spoor
-
-spoor snap -m baseline                 # record the machine as it is
-spoor run -- brew install jq           # record what a command changes
-spoor show                             # what HEAD changed, grouped by risk
-spoor review                           # browse history, diffs, notes
-spoor blame ~/Library/LaunchAgents/com.foo.updater.plist
-spoor revert HEAD                      # dry-run plan
-spoor revert HEAD --apply              # do it (recorded as a new commit)
+spoor snap -m baseline                          # record the machine as it is now
+spoor run -- sh -c "$(curl -fsSL https://example.com/install.sh)"
+                                                # run something, see what it changed
+spoor review                                    # browse history, diffs and notes
+spoor revert HEAD                               # show how to undo the last command
+spoor revert HEAD --apply                       # and do it
+spoor upgrade                                   # pick Homebrew upgrades from a checklist
 ```
 
-After a run, spoor offers to open the review right away (`--review` opens
-it without asking, `--no-review` skips the question).
+spoor keeps its history in `~/.local/share/spoor` (override with
+`SPOOR_HOME`). The first recording takes about a second.
 
-### Package upgrades
+## A tour
+
+### 1. Record an installer
+
+Put `spoor run --` in front of any command. Its output and exit code pass
+through unchanged. Afterwards spoor prints what changed, grouped by risk,
+highlights what matters (here, a launch agent that restarts itself), and offers
+to open the review.
 
 ```sh
-spoor upgrade --list          # what is outdated, what would be captured
-spoor upgrade tree            # brew update, capture, upgrade tree (+ outdated deps), open the review
-spoor upgrade                 # every outdated formula
-spoor upgrade python@3.12     # install a versioned formula Homebrew ships
+spoor run -- sh -c "$(curl -fsSL https://acme.example/install.sh)"
 ```
 
-The review groups the upgrade by package (`▸ tree 2.2.1 → 2.3.2`), with
-each changed file underneath and its diff beside it. Homebrew cannot
-install arbitrary versions, only versioned formulae it ships; spoor says so
-instead of guessing. `-y` skips the confirmation, `--no-review` skips the
-review, `--no-update` skips `brew update`.
+<p align="center"><img src="docs/images/run.svg" alt="spoor run summary" width="820"></p>
 
-`spoor run -- brew upgrade jq` also automatically watches `jq`'s own Cellar
-folder, with file contents. An upgrade creates a new version folder and
-deletes the old one. The review pairs the two and shows each file as a real
-diff under **UPGRADE**: changelog, man page, formula, headers. Binaries show
-their size change. In the review, `]` / `[` jump between readable diffs.
-Name the packages to get file diffs; a bare `brew upgrade` only records
-which version folders appeared and disappeared.
+Useful flags: `-m MESSAGE` names the commit, `--review` opens the review
+without asking, `--no-review` never asks, `--add-root PATH` watches an extra
+folder, and `--trace` records which process wrote each file.
 
-Use it as a pure inspector without running anything through it:
+### 2. Review what it did
+
+`spoor review` (or answering **Y** after a run) opens three panes:
+
+- **Changes**, grouped by risk: persistence first (launch agents, login items,
+  cron, systemd units), then trust (SSH, hosts, package sources), shell startup
+  files, commands on `PATH`, apps, config, data. Caches, logs and shell history
+  are folded away as noise (press `.` to show them).
+- **Diff** of the selected change. Binary and XML property lists are decoded
+  into readable `key = value` lines, and binaries show their size change.
+- **Notes**: what this kind of path is, what the analyzers found inside it
+  (`KeepAlive`, schedules, programs, `PATH` edits, `eval`, `curl | sh`, code
+  signatures), which process wrote it, and your own note.
+
+<p align="center"><img src="docs/images/review-shell.svg" alt="the review with a shell startup file selected" width="900"></p>
+
+`]` and `[` jump between changes that have a readable diff, `e` opens the file
+in `$EDITOR`, `d` opens `vimdiff` on the recorded before and after, and `o`
+opens a vim quickfix list of the whole commit. `n` attaches a note. Notes are
+saved with the commit and shown by `spoor show` and `spoor blame`.
+
+### 3. Undo it
+
+Mark changes with `x` (or a whole category with `X`) and press `R`. spoor shows
+the plan and asks before doing anything:
+
+<p align="center"><img src="docs/images/revert.svg" alt="the revert confirmation: bootout the launch agent, delete its plist" width="900"></p>
+
+The undo is recorded as a new commit, so it can be reviewed and undone too:
+
+<p align="center"><img src="docs/images/history.svg" alt="the history screen with the run and its revert" width="900"></p>
+
+The same from the command line:
 
 ```sh
-spoor snap                 # now and then
-spoor status               # what changed since, without recording
-spoor review now           # inspect those live changes interactively
+spoor revert HEAD                               # the plan, nothing touched
+spoor revert HEAD --apply                       # everything the command changed
+spoor revert HEAD --only persistence --apply    # only what starts by itself
+spoor revert HEAD --path ~/.zshrc --apply       # a single file
+spoor revert HEAD --script undo.sh              # a shell script to read and run yourself
+spoor restore ~/.zshrc --to HEAD~3 --apply      # one file as it was at any point
 ```
 
-## Commands
+### 4. Upgrade Homebrew packages
 
-| | |
+`spoor upgrade` runs `brew update`, lists what is outdated and lets you tick
+what to upgrade:
+
+<p align="center"><img src="docs/images/upgrade-pick.svg" alt="the upgrade checklist" width="820"></p>
+
+It shows the plan, including outdated dependencies brew would upgrade too, and
+how much of the current files it keeps so every change can be diffed:
+
+<p align="center"><img src="docs/images/upgrade-plan.svg" alt="the upgrade plan and confirmation" width="820"></p>
+
+After the upgrade the review opens grouped as **package › files › diff**.
+Homebrew installs each version into its own folder, so spoor pairs the old and
+new folders and compares them file by file:
+
+<p align="center"><img src="docs/images/upgrade-review-changelog.svg" alt="the upgrade review: fzf and tree, with the fzf changelog diff" width="900"></p>
+
+```sh
+spoor upgrade                   # checklist
+spoor upgrade jq ripgrep        # just these, plus their outdated dependencies
+spoor upgrade --list            # what would change; touches nothing
+spoor upgrade --all -y          # everything, no questions
+spoor upgrade python@3.12       # install a versioned formula Homebrew ships
+```
+
+Homebrew cannot install arbitrary versions, only versioned formulae it ships,
+and spoor says so instead of guessing. Undo an upgrade with `brew` itself: brew
+deletes old versions, so pointing links back at them would leave broken
+commands. Recording any other brew command works too: `spoor run -- brew
+install NAME` watches that package's folder automatically.
+
+### 5. History, blame and notes
+
+<p align="center"><img src="docs/images/history-cli.svg" alt="spoor log, blame and explain" width="820"></p>
+
+```sh
+spoor log                       # every run, snapshot, drift and revert
+spoor log ~/.zshrc              # only the commits that touched a path
+spoor show HEAD --patch         # one commit, with diffs
+spoor diff HEAD~5 now           # any two points, or a point and the live machine
+spoor blame ~/.local/bin/acme   # who put this here
+spoor explain ~/.zshenv         # what a path is and why it matters
+spoor note HEAD ~/.zshrc "acme's PATH hook, keep until the trial ends"
+spoor export HEAD > footprint.md   # shareable summary with secrets redacted
+```
+
+Changes made outside spoor are not lost. Before recording anything, spoor
+commits whatever changed since the last commit as **drift**, so `blame` can
+still tell you when it appeared.
+
+### 6. Watch without running anything through spoor
+
+spoor works as a pure inspector too:
+
+```sh
+spoor snap                      # take a checkpoint now and then
+spoor status                    # what changed since, without recording it
+spoor review now                # inspect those live changes interactively
+```
+
+### 7. Linux: try before you apply
+
+On Linux, `spoor try` runs a command on copy-on-write overlays of the watched
+folders. The command sees the real files, but its writes land in a private
+workspace. Review the result like any commit, then keep it or throw it away.
+
+```sh
+sudo spoor try -- ./install.sh
+spoor review <id>
+sudo spoor try apply <id>       # or: spoor try discard <id>
+```
+
+It needs root, or unprivileged user namespaces. Ubuntu restricts those, and
+spoor explains how to proceed. It is not a sandbox: network access and anything
+outside the overlays are real.
+
+## Getting help
+
+```sh
+spoor --help                    # overview of all commands
+spoor help upgrade              # one command: what it does, examples, flags
+spoor revert --help             # same thing
+```
+
+<p align="center"><img src="docs/images/help.svg" alt="spoor help revert" width="820"></p>
+
+Inside the review, `?` lists every key.
+
+## Command reference
+
+| Command | What it does |
 |---|---|
-| `run [-m MSG] [--trace] [--add-root SPEC] -- CMD` | record CMD's effects (exit code passed through), then offer the review |
-| `snap [-m MSG]` | commit the current state if it changed |
-| `try -- CMD` / `try apply REF` / `try discard REF` | Linux: run CMD on copy-on-write overlays, review, then apply or drop |
-| `status [--patch]` | live changes since HEAD (nothing stored) |
-| `log [-n N] [PATH]` | history, or the history of one path |
-| `show [REF] [--patch] [--all]` | a commit's changes; `--all` includes noise |
-| `diff A [B\|now] [--path P]` | compare any two points |
-| `review [REF\|now]` | the interactive inspector |
-| `blame PATH` | which commits touched PATH, and which process (with `--trace`) |
-| `explain PATH` | what a path is, why it matters, what is inside |
-| `note REF PATH [TEXT]` | read or write a note on one change |
-| `revert REF [--apply] [--only CATS] [--path P] [--force] [--script F]` | undo a commit, all or part |
-| `restore PATH --to REF [--before] [--apply]` | put one path back as it was at a commit |
-| `quickfix REF [-o F]` | vim quickfix list of a commit's changes (`vim -q F`) |
-| `export REF [--format md\|json] [--no-redact]` | shareable footprint, secrets and home paths redacted |
-| `init [--root SPEC]... [--no-state] [--max-content N]` | configure what is watched |
-| `roots`, `gc`, `version` | |
+| `spoor run [-m MSG] [--trace] [--add-root SPEC] -- CMD` | Record what `CMD` changes, then offer the review |
+| `spoor snap [-m MSG]` | Record the current state if anything changed |
+| `spoor upgrade [NAME...] [--list] [--all] [-y]` | Homebrew upgrades with captured files, then the review |
+| `spoor try -- CMD` · `try apply REF` · `try discard REF` | Linux: preview a command on overlays |
+| `spoor review [REF\|now]` | The interactive inspector |
+| `spoor status [--patch]` | Live changes since the last commit |
+| `spoor log [-n N] [PATH]` | History, or the history of one path |
+| `spoor show [REF] [--patch] [--all]` | One commit with its changes and notes |
+| `spoor diff A [B\|now] [--path P]` | Compare any two points |
+| `spoor blame PATH` | Which commits (and processes) touched a path |
+| `spoor explain PATH` | What a path is and why it matters |
+| `spoor note REF PATH [TEXT]` | Read or write a note on a change |
+| `spoor revert REF [--apply] [--only CATS] [--path P] [--force] [--script F]` | Undo a commit, whole or in part |
+| `spoor restore PATH --to REF [--before] [--apply]` | Put one path back as it was |
+| `spoor quickfix [REF] [-o FILE]` | A vim quickfix list of a commit |
+| `spoor export [REF] [--format md\|json]` | A shareable, redacted summary |
+| `spoor init [--root SPEC]... [--no-state]` | Choose what is watched |
+| `spoor roots` · `gc` · `scrub` · `version` | Housekeeping |
 
-Refs: `HEAD`, `HEAD~2`, a commit id or a unique prefix.
+`REF` is `HEAD`, `HEAD~2`, a commit id or a unique prefix of one. A root
+`SPEC` is `PATH[:DEPTH[:content|meta]]`, for example `~/.config:3` or
+`/Applications:1:meta`.
 
-## The inspector
+## Review keys
 
-`spoor review` opens the history. Press ⏎ on a commit for three panes: the
-changes grouped by risk, the diff, and notes (an explanation of what the
-path is, analyzer findings such as `KeepAlive: launchd restarts it whenever
-it exits`, the process that wrote it, and your own note).
+| Key | Action | Key | Action |
+|---|---|---|---|
+| `j` `k` `↑` `↓` | move | `]` `[` | next / previous readable diff |
+| `tab` | switch pane | `J` `K` `space` | scroll the diff |
+| `e` | open the file in `$EDITOR` | `d` | vimdiff before/after (`$SPOOR_DIFFTOOL` to change) |
+| `o` / `Q` | open / write a quickfix list | `n` | write a note (`ctrl+s` saves) |
+| `x` / `X` | mark a change / a category | `R` | revert the marked changes |
+| `u` | write an undo script | `.` | show or hide noise |
+| `/` | filter | `i` | narrow terminals: diff ↔ notes |
+| `esc` | back to history | `q` | quit |
 
-| key | |
-|---|---|
-| `j/k`, `tab` | move, switch pane |
-| `]` / `[` | next / previous change with a readable diff |
-| `J/K`, `space` | scroll the diff |
-| `e` | open the live file in `$EDITOR` |
-| `d` | `vimdiff` (or `nvim -d`, or `$SPOOR_DIFFTOOL`) of recorded before vs after |
-| `o` / `Q` | open / write a vim quickfix list of the commit |
-| `n` | write a note (ctrl+s saves) |
-| `x` / `X` | mark a change / a whole category |
-| `R` | revert the marked changes (or the selected one), with confirmation |
-| `u` | write an undo shell script |
-| `.` | show or hide noise (caches, logs, shell history) |
-| `/` | filter |
-| `n` (history) | review live changes since HEAD; `s` records a snapshot |
+In the history screen: `⏎` reviews a commit, `n` reviews live changes and `s`
+takes a snapshot.
 
 ## How it works
 
-**Watched roots.** A root is `PATH[:DEPTH[:content|meta]]`. Content roots
-store file bodies of up to 1 MiB, so they can be diffed and restored.
-Metadata roots record type, size, mtime and mode, which is enough to see
-that something appeared or changed. The built-in profile per OS covers the
-usual install targets. `spoor roots` prints it, and `spoor init --root ...`
-replaces it. A full snapshot of the default macOS profile took 0.6 s and
-2 MB; `status` took 0.04 s.
+**Watched roots.** spoor does not scan the whole disk. It watches the places
+software installs itself into: dotfiles, `~/.config`, `~/.ssh`, launch agents
+and daemons, login items, `/Applications`, privileged helpers, `/etc/paths.d`,
+`/opt/homebrew/bin`, `~/.local/bin` and friends (on Linux, `/etc`, systemd
+units, `/usr/local`, `/opt`). `spoor roots` prints the list and `spoor init`
+replaces it. Content roots keep file bodies up to 1 MiB so they can be diffed
+and restored. Metadata roots record type, size, mtime and mode.
 
-**Store.** `$SPOOR_HOME` (default `~/.local/share/spoor`, mode 0700) holds
-content-addressed objects, compressed manifests, commits, notes and traces.
-On APFS, bodies are captured with `clonefile(2)`, which is instant and shares
-disk blocks until the file changes.
+**System state.** Loaded launchd jobs, your crontab and listening TCP ports
+(systemd user units on Linux) are recorded as virtual `@state/…` entries and
+diffed like files.
 
-**System state.** Loaded launchd jobs, crontab and listening TCP ports
-(systemd user units on Linux) are recorded as virtual `@state/...` entries
-and diffed like files.
+**Store.** A content-addressed object store with compressed manifests, commits,
+notes and traces, in a folder with mode 0700. On APFS, file bodies are captured
+with `clonefile(2)`, which is instant and shares disk blocks until the file
+changes.
 
-**Drift.** Before recording a command, spoor compares the machine with
-HEAD. Anything that changed in between is committed first as `drift`, so
-history stays continuous and `blame` can say "changed outside spoor".
+**Commits.** `run` and `snap` record, `revert` and `restore` undo, `drift`
+catches changes made in between, and `try` records previews. Every command
+works on the same history.
 
-**Classification.** A small knowledge base maps paths to categories
-(persistence, trust, shell, path, apps, config, state, data, noise) with an
-explanation and a risk level. Analyzers read inside the changes: launchd
-plists (binary or XML), systemd units, lines added to shell files (PATH
-edits, `eval`, `curl | sh`, secrets), binary kind and code signature.
+**Understanding changes.** A small knowledge base maps paths to categories,
+risk levels and explanations. Analyzers read launchd property lists, systemd
+units, lines added to shell files, binary type and code signature. Version
+folders (`Cellar/tree/2.2.1` → `2.3.2`) are paired so upgrades read as file
+diffs.
 
-## Undo semantics
+## Undo: what spoor will and will not do
 
-Revert plans against the **live** machine, not just the recorded state:
-
-- A path changed again after the commit is a **conflict** and is left alone
-  unless `--force`.
-- Added LaunchAgents and daemons are unloaded with `launchctl bootout`
-  before their plists are removed.
-- A directory the commit created is removed as a whole tree, including
-  contents deeper than the watched depth such as a cloned toolchain. It is
-  a conflict instead if anything inside was modified after the commit.
-- Content that was never captured (metadata roots, files over the size cap,
-  secrets) is reported as **unrestorable**. It is never guessed.
-- Noise is not reverted by default, except things the commit created.
-- Every applied revert or restore is a new commit.
+- It plans against the **live** machine. A file edited again since the commit
+  is a conflict and is left alone unless you pass `--force`.
+- It unloads launch agents and daemons (`launchctl bootout`) before removing
+  their plists.
+- It removes a folder the command created as a whole tree, including contents
+  deeper than it watched, unless something inside changed afterwards.
+- It checks each file again just before acting, refuses to follow a parent
+  folder that has become a symlink, and keeps setuid and setgid bits.
+- It never guesses content it did not capture. Such changes are reported as
+  **unrestorable**.
+- Every applied undo is a new commit.
 
 ## Privacy
 
-spoor keeps copies of watched files so it can diff and undo them. What it
-will not keep:
+spoor keeps copies of watched files so it can diff and undo them. It never
+keeps:
 
-- **Files whose name says secret.** Examples: SSH keys (anything in `~/.ssh`
+- **files whose name marks them as secret**: SSH keys (anything in `~/.ssh`
   except `config`, `known_hosts`, `authorized_keys` and `*.pub`), `*.pem`,
   `*.key`, `.env*`, `.npmrc`, `.pypirc`, `.netrc`, `.git-credentials`, the
   `gh`, `gcloud`, `aws`, `azure`, `kube` and `docker` credential folders,
-  password stores, keychains, shell histories and `/etc/shadow`.
-- **Files whose contents look secret,** whatever their name: private-key
-  blocks, known token formats (GitHub, GitLab, Slack, AWS, OpenAI, Anthropic,
-  Stripe, npm, Vault, JWTs), credentials inside URLs, `Authorization` headers,
-  and literal values assigned to secret-named keys (`AWS_SECRET_ACCESS_KEY=…`,
-  `password: …`). A reference like `TOKEN="$VAR"` is not treated as a secret.
-- **The same content check applies to recorded state** (a crontab line with
-  a token) **and to command lines** (`--token X` is stored as
-  `--token [REDACTED]`).
+  password stores, keychains, shell histories, `/etc/shadow`;
+- **files whose contents look secret**, whatever their name: private keys,
+  known token formats, credentials inside URLs, `Authorization` headers, and
+  literal values assigned to secret-named keys (`AWS_SECRET_ACCESS_KEY=…`). A
+  reference like `TOKEN="$VAR"` is fine.
 
-Such files are still **hashed**, so a change to them shows up in history. Their
-contents are never shown, exported or restorable. Anything that looks secret
-is also withheld from the review, `show --patch` and vimdiff, which covers
-repositories written by older versions; `spoor scrub` removes those old
-copies for good.
+Such files are still hashed, so a change to them shows up, but their contents
+are never stored, shown, exported or restorable. The same check covers
+recorded state (a crontab line with a token), and command lines are stored with
+secret arguments redacted. `spoor scrub` removes anything older versions kept.
 
-`export` is meant for sharing. It redacts tokens, keys, passwords and
-authorization headers, e-mail addresses, SSH host names and users, and home
-directories, and it redacts before truncating a diff. It is still regex
-based: read an export before you publish it.
-
-Temporary copies made for vimdiff are deleted when vimdiff exits (and vim is
-told not to keep swap or history files). Exports, quickfix lists and undo
-scripts are written atomically with private permissions. The repository lives
-in `~/.local/share/spoor` with mode 0700. On macOS, folders protected by
-privacy controls are skipped with one warning.
-
-## Tracing and previews
-
-- `run --trace` attributes each write to a process. On macOS it uses
-  `eslogger`, which needs root (`sudo -v` first). On Linux it uses `strace`.
-- `try` (Linux) mounts overlays over the watched directories in a private
-  mount namespace, so the command's writes land in a workspace. Review it
-  like any commit, then `try apply` or `try discard`. It needs root, or
-  unprivileged user namespaces. Ubuntu restricts those via AppArmor, and
-  spoor says so. A user who is not root only gets overlays inside home. It
-  is not a security sandbox: network and everything outside the overlays
-  are untouched by it.
+`spoor export` is for sharing. It redacts tokens, keys, passwords, authorization
+headers, e-mail addresses, SSH host details and home directories. It is still
+pattern based, so read an export before you publish it. Temporary files for
+vimdiff are deleted when vimdiff exits.
 
 ## Limits
 
-- Only watched roots are seen. A write elsewhere is invisible unless you
-  add a root, or `--trace` shows it.
-- Inside metadata roots, a modified file can be detected but not restored.
-- Loaded-job state covers your GUI session. System daemons need root to
-  bootout.
+- Only watched roots are seen. A write elsewhere is invisible unless you add a
+  root (`--add-root`) or record with `--trace`.
+- In metadata-only roots a modified file is detected but cannot be restored.
+- Unloading system launch daemons needs root. `--trace` on macOS needs root
+  for `eslogger`.
+- On macOS, folders protected by privacy controls are skipped. Give your
+  terminal Full Disk Access to include them.
+- spoor is an inspector, not a sandbox: it records what a command did and helps
+  undo it; it does not stop the command.
 
 ## Development
 
 ```sh
-go test ./...                 # unit, TUI model and sandboxed end-to-end tests
-scripts/tui-smoke.sh          # drives the real UI in tmux (vimdiff, notes, revert)
-scripts/prepublish-check.sh   # fails on e-mails, private paths, token-shaped literals, private agent files
+go test ./...                   # unit, TUI and end-to-end tests (real binary, sandboxed HOME)
+scripts/tui-smoke.sh            # drives the real review UI in tmux and checks the screen
+scripts/screenshots.sh          # regenerates docs/images/*.svg in a sandbox
+scripts/prepublish-check.sh     # fails on e-mail identities, home paths, token literals, agent files
 ```
 
-The end-to-end tests run the real binary against a throwaway `HOME`. They
-check byte-for-byte that `revert` restores the baseline tree, that reverting
-the revert restores the installed tree, and that conflicts, forced reverts,
-restore, drift, blame, gc and redaction behave as described.
-
-Linux, cross-compiled from a Mac:
+The end-to-end tests check, byte for byte, that `revert` restores the recorded
+tree, that reverting the revert brings the change back, and that conflicts,
+forced reverts, restore, drift, blame, upgrades, secrets and redaction behave
+as described. On Linux, run them as root to include `try`:
 
 ```sh
-GOOS=linux GOARCH=amd64 go build -o spoor-linux ./cmd/spoor
-GOOS=linux GOARCH=amd64 go test -c -o e2e.test ./e2e
-# on the Linux box:
-SPOOR_BIN=./spoor-linux ./e2e.test -test.v
-sudo env SPOOR_BIN=./spoor-linux ./e2e.test -test.v -test.run 'Try|Trace'
+go test -c -o e2e.test ./e2e && go build -o spoor ./cmd/spoor
+sudo env SPOOR_BIN=$PWD/spoor ./e2e.test -test.v
 ```
 
-Layout: `cmd/spoor` (CLI), `internal/app` (operations), `store`, `scan`,
-`diff`, `kb` (knowledge base and analyzers), `revert`, `trace`, `try`,
-`redact`, `tui`, `e2e/`.
+Layout: `cmd/spoor` (CLI and help), `internal/app` (operations), `store`,
+`scan`, `diff`, `kb` (knowledge base and analyzers), `revert`, `trace`, `try`,
+`brew`, `redact`, `tui`, `e2e/`, and `scripts/ansi2svg` (screenshot renderer).

@@ -112,8 +112,8 @@ func (a *App) PrintChanges(w io.Writer, items []Item, showNoise bool, writers ma
 
 func (a *App) CommitLine(c *model.Commit) string {
 	items := []Item{}
-	if _, _, ch, err := a.CommitChanges(c); err == nil {
-		items = a.Items(ch)
+	if pre, post, ch, err := a.CommitChanges(c); err == nil {
+		items = a.View(pre, post, ch)
 	}
 	cnt := a.Count(items)
 	counts := cnt.String()
@@ -128,7 +128,7 @@ func (a *App) CommitLine(c *model.Commit) string {
 	if c.Kind == model.KindTry {
 		kind = "try:" + c.TryState
 	}
-	return fmt.Sprintf("%s  %s  %-12s %-18s %s", c.ID, c.Time.Local().Format("2006-01-02 15:04"), kind, counts, msg)
+	return fmt.Sprintf("%s  %s  %-12s %-28s %s", c.ID, c.Time.Local().Format("2006-01-02 15:04"), kind, counts, msg)
 }
 
 // Quickfix renders changes as a vim quickfix list (`vim -q file`).

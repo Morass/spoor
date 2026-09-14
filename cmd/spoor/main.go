@@ -66,6 +66,8 @@ Share & housekeeping
 
 Root specs: PATH[:DEPTH[:content|meta]]   e.g. --root ~/.config:3 --root /Applications:1:meta
 Repository: $SPOOR_HOME (default ~/.local/share/spoor)
+
+Run "spoor help COMMAND" (or "spoor COMMAND --help") for details and examples.
 `
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
@@ -116,9 +118,12 @@ func parse(fs *flag.FlagSet, args []string) ([]string, error) {
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
-	if len(args) == 0 || args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
+	if len(args) == 0 || ((args[0] == "help" || args[0] == "-h" || args[0] == "--help") && len(args) == 1) {
 		fmt.Fprint(stdout, usage)
 		return 0
+	}
+	if args[0] == "help" {
+		args = []string{args[1], "--help"}
 	}
 	if args[0] == "__try-child" {
 		if len(args) > 1 {
@@ -142,10 +147,21 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "spoor: unknown command %q\n\n%s", cmd, usage)
 		return 2
 	}
+	if wantsHelp(rest) {
+		switch cmd {
+		case "review", "blame", "note", "explain", "roots", "gc", "scrub":
+			printCommandHelp(stdout, cmd)
+			return 0
+		case "run", "try":
+			rest = []string{"--help", "--"}
+		default:
+			rest = []string{"--help"}
+		}
+	}
 	code, err := fn(a, rest)
 	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {
-			return 2
+			return 0
 		}
 		fmt.Fprintln(stderr, "spoor:", err)
 		if code == 0 {
@@ -196,8 +212,12 @@ func suffix(spec string) string {
 
 func newFS(name string) *flag.FlagSet {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
+	fs.SetOutput(os.Stdout)
 	fs.Usage = func() {
-		fmt.Fprintf(fs.Output(), "usage: spoor %s — see `spoor help`\n", name)
+		if !printCommandHelp(os.Stdout, name) {
+			fmt.Fprintf(os.Stdout, "usage: spoor %s\n", name)
+		}
+		fmt.Fprintln(os.Stdout, "\nFlags:")
 		fs.PrintDefaults()
 	}
 	return fs
@@ -717,6 +737,9 @@ func cmdExplain(a *app.App, args []string) (int, error) {
 	}
 	p := a.ExpandPath(args[0])
 	rule := kb.Classify(p, a.Home, a.GOOS)
+	if fi, err := os.Lstat(p); err == nil && fi.IsDir() && rule.Title == "File" {
+		rule.Title = "Directory"
+	}
 	fmt.Fprintf(a.Out, "%s %s  [%s]\n", rule.Risk.Icon(), rule.Title, rule.Category)
 	if rule.Explain != "" {
 		fmt.Fprintln(a.Out, "  "+rule.Explain)
@@ -729,7 +752,8 @@ func cmdExplain(a *app.App, args []string) (int, error) {
 			}
 		}
 		for _, d := range kb.Analyze(nil, ch, true) {
-			fmt.Fprintf(a.Out, "  %s: %s\n", d.Key, d.Value)
+			// explain looks at the file as it is, not at a change
+			fmt.Fprintf(a.Out, "  %s: %s\n", strings.TrimPrefix(d.Key, "added "), d.Value)
 		}
 	} else if !strings.HasPrefix(p, model.StatePrefix) {
 		fmt.Fprintln(a.Out, "  (does not exist)")

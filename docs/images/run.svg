@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1031" height="682" viewBox="0 0 1031 682" font-family="'SF Mono', Menlo, Consolas, 'DejaVu Sans Mono', 'Liberation Mono', monospace" font-size="14">
+<rect width="1031" height="682" rx="10" fill="#10141b"/>
+<rect width="1031" height="34" rx="10" fill="#1a1f29"/><rect y="24" width="1031" height="10" fill="#1a1f29"/>
+<circle cx="20" cy="17" r="6" fill="#ff5f57"/><circle cx="40" cy="17" r="6" fill="#febc2e"/><circle cx="60" cy="17" r="6" fill="#28c840"/><text x="515" y="22" fill="#8b93a3" text-anchor="middle" font-size="13">spoor run</text>
+<text x="18.00" y="56.32" fill="#d5dae3" xml:space="preserve">spoor: recording before state</text><text x="262.47" y="56.32" fill="#d5dae3" textLength="8.43" lengthAdjust="spacingAndGlyphs" xml:space="preserve">…</text>
+<text x="18.00" y="74.32" fill="#d5dae3" xml:space="preserve">==&gt; Installing acme 1.4.0</text>
+<text x="18.00" y="92.32" fill="#d5dae3" xml:space="preserve">==&gt; acme is ready. Restart your shell.</text>
+<text x="18.00" y="110.32" fill="#d5dae3" xml:space="preserve">spoor: recording after state</text><text x="254.04" y="110.32" fill="#d5dae3" textLength="8.43" lengthAdjust="spacingAndGlyphs" xml:space="preserve">…</text>
+
+<text x="18.00" y="146.32" fill="#d5dae3" xml:space="preserve">spoor: sh exited 0 </text><text x="178.17" y="146.32" fill="#d5dae3" textLength="8.43" lengthAdjust="spacingAndGlyphs" xml:space="preserve">—</text><text x="186.60" y="146.32" fill="#d5dae3" xml:space="preserve"> commit a0d5f44afe</text>
+
+<text x="18.00" y="182.32" fill="#d5dae3" xml:space="preserve">  PERSISTENCE</text>
+<text x="34.86" y="200.32" fill="#d5dae3" textLength="8.43" lengthAdjust="spacingAndGlyphs" xml:space="preserve">⚠</text><text x="43.29" y="200.32" fill="#d5dae3" xml:space="preserve"> + ~/Library/LaunchAgents/com.acme.updater.plist      User LaunchAgent</text>
+<text x="18.00" y="218.32" fill="#d5dae3" xml:space="preserve">        Label: com.acme.updater</text>
+<text x="18.00" y="236.32" fill="#d5dae3" xml:space="preserve">        Runs: /opt/acme/bin/acme-updater --background</text>
+<text x="18.00" y="254.32" fill="#d5dae3" xml:space="preserve">        RunAtLoad: starts immediately when loaded and at every login/boot</text>
+<text x="18.00" y="272.32" fill="#d5dae3" xml:space="preserve">        KeepAlive: launchd restarts it whenever it exits </text><text x="498.51" y="272.32" fill="#d5dae3" textLength="8.43" lengthAdjust="spacingAndGlyphs" xml:space="preserve">—</text><text x="506.94" y="272.32" fill="#d5dae3" xml:space="preserve"> killing it does not stop it</text>
+
+<text x="18.00" y="308.32" fill="#d5dae3" xml:space="preserve">  SHELL</text>
+<text x="34.86" y="326.32" fill="#d5dae3" textLength="8.43" lengthAdjust="spacingAndGlyphs" xml:space="preserve">◆</text><text x="43.29" y="326.32" fill="#d5dae3" xml:space="preserve"> ~ ~/.zshrc                                           zsh startup file</text>
+
+<text x="18.00" y="362.32" fill="#d5dae3" xml:space="preserve">  PATH</text>
+<text x="34.86" y="380.32" fill="#d5dae3" textLength="8.43" lengthAdjust="spacingAndGlyphs" xml:space="preserve">◆</text><text x="43.29" y="380.32" fill="#d5dae3" xml:space="preserve"> + ~/.local/bin/acme                                  Command on PATH</text>
+
+<text x="18.00" y="416.32" fill="#d5dae3" xml:space="preserve">  CONFIG</text>
+<text x="34.86" y="434.32" fill="#d5dae3" textLength="8.43" lengthAdjust="spacingAndGlyphs" xml:space="preserve">·</text><text x="43.29" y="434.32" fill="#d5dae3" xml:space="preserve"> + ~/.config/acme                                     Configuration file</text>
+<text x="34.86" y="452.32" fill="#d5dae3" textLength="8.43" lengthAdjust="spacingAndGlyphs" xml:space="preserve">·</text><text x="43.29" y="452.32" fill="#d5dae3" xml:space="preserve"> + ~/.config/acme/config.toml                         Configuration file</text>
+
+<text x="18.00" y="488.32" fill="#d5dae3" xml:space="preserve">  DATA</text>
+<text x="34.86" y="506.32" fill="#d5dae3" textLength="8.43" lengthAdjust="spacingAndGlyphs" xml:space="preserve">·</text><text x="43.29" y="506.32" fill="#d5dae3" xml:space="preserve"> + ~/.acme                                            Directory</text>
+<text x="34.86" y="524.32" fill="#d5dae3" textLength="8.43" lengthAdjust="spacingAndGlyphs" xml:space="preserve">·</text><text x="43.29" y="524.32" fill="#d5dae3" xml:space="preserve"> + ~/.config                                          Directory</text>
+<text x="34.86" y="542.32" fill="#d5dae3" textLength="8.43" lengthAdjust="spacingAndGlyphs" xml:space="preserve">·</text><text x="43.29" y="542.32" fill="#d5dae3" xml:space="preserve"> + ~/.local/bin                                       Directory</text>
+<text x="34.86" y="560.32" fill="#d5dae3" textLength="8.43" lengthAdjust="spacingAndGlyphs" xml:space="preserve">·</text><text x="43.29" y="560.32" fill="#d5dae3" xml:space="preserve"> + ~/Library                                          Directory</text>
+<text x="34.86" y="578.32" fill="#d5dae3" textLength="8.43" lengthAdjust="spacingAndGlyphs" xml:space="preserve">·</text><text x="43.29" y="578.32" fill="#d5dae3" xml:space="preserve"> + ~/Library/LaunchAgents                             Directory</text>
+
+<text x="18.00" y="614.32" fill="#d5dae3" xml:space="preserve">  inspect: spoor review a0d5f44afe    undo: spoor revert a0d5f44afe --apply</text>
+
+<text x="18.00" y="650.32" fill="#d5dae3" xml:space="preserve">  Open the review now? [Y/n]</text>
+</svg>

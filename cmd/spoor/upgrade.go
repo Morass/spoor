@@ -23,7 +23,7 @@ import (
 func cmdUpgrade(a *app.App, args []string) (int, error) {
 	fs := newFS("upgrade")
 	list := fs.Bool("list", false, "only show what would be upgraded")
-	noUpdate := fs.Bool("no-update", false, "skip `brew update` (use the formula list you already have)")
+	noUpdate := fs.Bool("no-update", false, "skip running brew update first")
 	yes := fs.Bool("y", false, "do not ask; with no names, upgrade everything outdated")
 	all := fs.Bool("all", false, "upgrade every outdated formula without the picker")
 	noReview := fs.Bool("no-review", false, "do not open the review afterwards")

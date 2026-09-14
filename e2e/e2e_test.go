@@ -638,3 +638,26 @@ func TestUpgradeCommand(t *testing.T) {
 		t.Errorf("unknown version should explain the Homebrew limit: %d %s", code, errOut)
 	}
 }
+
+func TestHelp(t *testing.T) {
+	s := newSandbox(t)
+	top := s.must("--help")
+	if !strings.Contains(top, "spoor help COMMAND") || !strings.Contains(top, "spoor upgrade") {
+		t.Errorf("top-level help:\n%s", top)
+	}
+	for _, args := range [][]string{{"help", "upgrade"}, {"upgrade", "--help"}, {"run", "-h"}, {"blame", "--help"}, {"revert", "--help"}} {
+		out := s.must(args...)
+		if !strings.Contains(out, "spoor "+args[0]) && !strings.Contains(out, "spoor "+args[1]) {
+			t.Errorf("%v: no usage line:\n%s", args, out)
+		}
+		if args[0] != "blame" && !strings.Contains(out, "Examples:") {
+			t.Errorf("%v: no examples:\n%s", args, out)
+		}
+	}
+	if out := s.must("upgrade", "--help"); !strings.Contains(out, "Flags:") || !strings.Contains(out, "-no-review") {
+		t.Errorf("flags missing from command help:\n%s", out)
+	}
+	if _, _, code := s.spoor("frobnicate"); code != 2 {
+		t.Errorf("unknown command exit %d", code)
+	}
+}

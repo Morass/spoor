@@ -3,7 +3,10 @@
 package kb
 
 import (
+	"os"
+	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -150,14 +153,6 @@ var Rules = []Rule{
 	{Pattern: "~/.npm-global/bin/*", Category: Path, Risk: Notice, Title: "npm global command", Explain: pathExplain},
 
 	// --- apps
-	{Pattern: "/opt/homebrew/Cellar/*", Category: Apps, Risk: Notice, Title: "Homebrew package", Explain: brewExplain},
-	{Pattern: "/usr/local/Cellar/*", Category: Apps, Risk: Notice, Title: "Homebrew package", Explain: brewExplain},
-	{Pattern: "/opt/homebrew/Cellar/*/*", Category: Apps, Risk: Notice, Title: "Homebrew package version", Explain: brewExplain},
-	{Pattern: "/usr/local/Cellar/*/*", Category: Apps, Risk: Notice, Title: "Homebrew package version", Explain: brewExplain},
-	{Pattern: "/opt/homebrew/Cellar/**", Category: Data, Title: "Homebrew package file"},
-	{Pattern: "/usr/local/Cellar/**", Category: Data, Title: "Homebrew package file"},
-	{Pattern: "/opt/homebrew/opt/*", Category: Apps, Title: "Homebrew active-version link", Explain: "Points at the package version currently in use; an upgrade repoints it."},
-	{Pattern: "/usr/local/opt/*", Category: Apps, Title: "Homebrew active-version link", Explain: "Points at the package version currently in use; an upgrade repoints it."},
 	{Pattern: "/Applications/*", OS: "darwin", Category: Apps, Title: "Application", Explain: "An app bundle in /Applications."},
 	{Pattern: "~/Applications/*", OS: "darwin", Category: Apps, Title: "Application (user)"},
 	{Pattern: "~/.local/share/applications/*", OS: "linux", Category: Apps, Title: "Desktop launcher entry"},
@@ -212,15 +207,59 @@ var (
 	cache   = map[string][]compiled{}
 )
 
+// brewRules describes one Homebrew prefix.
+func brewRules(prefix string) []Rule {
+	link := "Points at the package version currently in use; an upgrade repoints it."
+	return []Rule{
+		{Pattern: prefix + "/Cellar/*", Category: Apps, Risk: Notice, Title: "Homebrew package", Explain: brewExplain},
+		{Pattern: prefix + "/Cellar/*/*", Category: Apps, Risk: Notice, Title: "Homebrew package version", Explain: brewExplain},
+		{Pattern: prefix + "/Cellar/**", Category: Data, Title: "Homebrew package file"},
+		{Pattern: prefix + "/opt/*", Category: Apps, Title: "Homebrew active-version link", Explain: link},
+		{Pattern: prefix + "/bin/*", Category: Path, Risk: Notice, Title: "Command on PATH", Explain: pathExplain},
+	}
+}
+
+// brewPrefixes are the standard prefixes plus the one the environment names
+// (HOMEBREW_PREFIX, or the parent of HOMEBREW_CELLAR).
+func brewPrefixes() []string {
+	ps := []string{"/opt/homebrew", "/usr/local", "/home/linuxbrew/.linuxbrew"}
+	env := os.Getenv("HOMEBREW_PREFIX")
+	if env == "" && os.Getenv("HOMEBREW_CELLAR") != "" {
+		env = filepath.Dir(os.Getenv("HOMEBREW_CELLAR"))
+	}
+	if env != "" && !slices.Contains(ps, env) {
+		ps = append([]string{env}, ps...)
+	}
+	return ps
+}
+
 func compile(home, goos string) []compiled {
-	key := home + "\x00" + goos
+	prefixes := brewPrefixes()
+	key := home + "\x00" + goos + "\x00" + strings.Join(prefixes, ":")
 	cacheMu.Lock()
 	defer cacheMu.Unlock()
 	if c, ok := cache[key]; ok {
 		return c
 	}
-	var out []compiled
+	var brew []Rule
+	for _, p := range prefixes {
+		brew = append(brew, brewRules(p)...)
+	}
+	// Homebrew rules go right before the first generic data rule.
+	all := make([]Rule, 0, len(Rules)+len(brew))
+	placed := false
 	for _, r := range Rules {
+		if !placed && r.Category == Data {
+			all = append(all, brew...)
+			placed = true
+		}
+		all = append(all, r)
+	}
+	if !placed {
+		all = append(all, brew...)
+	}
+	var out []compiled
+	for _, r := range all {
 		if r.OS != "" && r.OS != goos {
 			continue
 		}

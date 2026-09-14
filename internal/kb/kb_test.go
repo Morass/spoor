@@ -91,3 +91,13 @@ func TestAnalyzeShellLines(t *testing.T) {
 		t.Error("curl|sh should be a warning")
 	}
 }
+
+func TestBrewPrefixFromEnvironment(t *testing.T) {
+	t.Setenv("HOMEBREW_CELLAR", "/custom/brew/Cellar")
+	if r := Classify("/custom/brew/opt/jq", "/Users/u", "darwin"); r.Title != "Homebrew active-version link" {
+		t.Errorf("custom prefix link: %+v", r)
+	}
+	if r := Classify("/opt/homebrew/Cellar/jq/1.8.2", "/Users/u", "darwin"); r.Title != "Homebrew package version" {
+		t.Errorf("standard prefix still classified: %+v", r)
+	}
+}

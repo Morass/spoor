@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1031" height="232" viewBox="0 0 1031 232" font-family="'SF Mono', Menlo, Consolas, 'DejaVu Sans Mono', 'Liberation Mono', monospace" font-size="14">
+<rect width="1031" height="232" rx="10" fill="#10141b"/>
+<rect width="1031" height="34" rx="10" fill="#1a1f29"/><rect y="24" width="1031" height="10" fill="#1a1f29"/>
+<circle cx="20" cy="17" r="6" fill="#ff5f57"/><circle cx="40" cy="17" r="6" fill="#febc2e"/><circle cx="60" cy="17" r="6" fill="#28c840"/><text x="515" y="22" fill="#8b93a3" text-anchor="middle" font-size="13">spoor upgrade</text>
+<text x="18.00" y="56.32" fill="#d5dae3" xml:space="preserve">spoor: brew update</text><text x="169.74" y="56.32" fill="#d5dae3" textLength="8.43" lengthAdjust="spacingAndGlyphs" xml:space="preserve">…</text>
+<text x="18.00" y="74.32" fill="#d5dae3" xml:space="preserve">Already up-to-date.</text>
+
+<text x="18.00" y="110.32" fill="#d5dae3" xml:space="preserve">  fzf                        0.65.1         </text><text x="388.92" y="110.32" fill="#d5dae3" textLength="8.43" lengthAdjust="spacingAndGlyphs" xml:space="preserve">→</text><text x="397.35" y="110.32" fill="#d5dae3" xml:space="preserve"> 0.74.3          6 files</text>
+<text x="18.00" y="128.32" fill="#d5dae3" xml:space="preserve">  tree                       2.2.1          </text><text x="388.92" y="128.32" fill="#d5dae3" textLength="8.43" lengthAdjust="spacingAndGlyphs" xml:space="preserve">→</text><text x="397.35" y="128.32" fill="#d5dae3" xml:space="preserve"> 2.3.2           5 files</text>
+
+<text x="18.00" y="164.32" fill="#d5dae3" xml:space="preserve">  spoor keeps the current files (0.3 MB) so every change can be diffed and undone</text>
+
+<text x="18.00" y="200.32" fill="#d5dae3" xml:space="preserve">  Upgrade 2 package(s)? [Y/n]</text>
+</svg>
