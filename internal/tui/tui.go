@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -66,6 +67,7 @@ type Model struct {
 	synthetic   bool
 	live        bool
 	postRoots   []model.Root
+	postTime    time.Time
 	postState   bool
 	items       []app.Item
 	rows        []row
@@ -190,7 +192,7 @@ func (m *Model) openCommit(c *model.Commit) error {
 	}
 	m.commit, m.synthetic = c, false
 	m.live = c.ID == m.app.St.Head()
-	m.postRoots, m.postState = post.Roots, post.State
+	m.postRoots, m.postState, m.postTime = post.Roots, post.State, post.Created
 	m.notes = m.app.St.Notes(c.ID)
 	m.writers = m.app.St.Trace(c.ID)
 	m.setItems(changes)
@@ -199,7 +201,7 @@ func (m *Model) openCommit(c *model.Commit) error {
 
 func (m *Model) openNow(head *model.Commit, changes []model.Change) {
 	m.commit = &model.Commit{ID: "now", Kind: "live", Message: "changes since " + head.ID + " (not recorded yet)", Time: head.Time}
-	m.synthetic, m.live = true, true
+	m.synthetic, m.live, m.postTime = true, true, time.Now()
 	if hm, err := m.app.St.LoadManifest(head.Post); err == nil {
 		m.postRoots, m.postState = hm.Roots, hm.State
 	}
@@ -572,7 +574,7 @@ func (m *Model) startRevert() {
 		return
 	}
 	paths := m.targetPaths()
-	plan := revert.Plan(m.app.St, m.allChanges(), revert.Options{Paths: paths, Home: m.app.Home, GOOS: m.app.GOOS})
+	plan := revert.Plan(m.app.St, m.allChanges(), revert.Options{Paths: paths, Home: m.app.Home, GOOS: m.app.GOOS, Since: m.postTime})
 	var body []string
 	exec := 0
 	for _, a := range plan {
@@ -981,7 +983,7 @@ func (m *Model) reviewKey(s string) (tea.Model, tea.Cmd) {
 			paths[p] = true
 		}
 		var opt revert.Options
-		opt.Home, opt.GOOS = m.app.Home, m.app.GOOS
+		opt.Home, opt.GOOS, opt.Since = m.app.Home, m.app.GOOS, m.postTime
 		if len(paths) > 0 {
 			opt.Paths = paths
 		}

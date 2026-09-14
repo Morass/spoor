@@ -85,7 +85,7 @@ func Child(specFile string) {
 		fail("%v", err)
 	}
 	if err := unix.Mount("none", "/", "", unix.MS_REC|unix.MS_PRIVATE, ""); err != nil {
-		fail("make mounts private: %v", err)
+		fail("make mounts private: %v%s", err, usernsHint(spec, err))
 	}
 	for i, root := range spec.Roots {
 		opts := fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s", root, spec.Upper(i), spec.Work(i))
@@ -93,7 +93,7 @@ func Child(specFile string) {
 			opts += ",userxattr"
 		}
 		if err := unix.Mount("overlay", root, "overlay", 0, opts); err != nil {
-			fail("overlay on %s: %v", root, err)
+			fail("overlay on %s: %v%s", root, err, usernsHint(spec, err))
 		}
 	}
 	if err := os.Chdir(spec.Cwd); err != nil {
@@ -107,6 +107,17 @@ func Child(specFile string) {
 	err = syscall.Exec(path, spec.Argv, os.Environ())
 	fmt.Fprintf(os.Stderr, "spoor try: exec %s: %v\n", path, err)
 	os.Exit(126)
+}
+
+func usernsHint(spec Spec, err error) string {
+	if !spec.UserNS || !(errors.Is(err, unix.EPERM) || errors.Is(err, unix.EACCES)) {
+		return ""
+	}
+	h := "\n  unprivileged user namespaces are restricted on this system"
+	if b, _ := os.ReadFile("/proc/sys/kernel/apparmor_restrict_unprivileged_userns"); strings.TrimSpace(string(b)) == "1" {
+		h += " (kernel.apparmor_restrict_unprivileged_userns=1)"
+	}
+	return h + ".\n  Run it as root (sudo spoor try ...) or allow user namespaces for spoor with an AppArmor profile."
 }
 
 func opaque(p string, userns bool) bool {

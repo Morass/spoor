@@ -15,6 +15,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 var bin string
@@ -427,4 +428,38 @@ func TestTryPreviewApplyDiscard(t *testing.T) {
 		}
 	}
 	sameTree(t, "discarded try", s.fingerprint(), after)
+}
+
+func TestAddedDirectoryTreeRemovedUnlessTouchedLater(t *testing.T) {
+	s := newSandbox(t)
+	s.must("init", "--root", s.home+":1", "--no-state")
+	s.must("snap")
+	base := s.fingerprint()
+	deep := `mkdir -p "$HOME/.tool/lib/a/b" && echo x > "$HOME/.tool/lib/a/b/deep" && ln -s lib "$HOME/.tool/current"`
+	s.must("run", "--", "sh", "-c", deep)
+	id := headID(t, s)
+	if plan := s.must("revert", id); !strings.Contains(plan, "delete-tree") || !strings.Contains(plan, "entries inside") {
+		t.Fatalf("plan:\n%s", plan)
+	}
+	s.must("revert", id, "--apply")
+	sameTree(t, "tree deeper than the watched depth", s.fingerprint(), base)
+
+	s.must("run", "--", "sh", "-c", deep)
+	id = headID(t, s)
+	later := filepath.Join(s.home, ".tool/lib/a/b/mine")
+	os.WriteFile(later, []byte("user data\n"), 0o644)
+	future := time.Now().Add(time.Hour)
+	os.Chtimes(later, future, future)
+	plan := s.must("revert", id)
+	if !strings.Contains(plan, "conflict") || !strings.Contains(plan, "modified after the commit") {
+		t.Fatalf("a file added later inside must block tree removal:\n%s", plan)
+	}
+	s.must("revert", id, "--apply")
+	if !s.exists(".tool/lib/a/b/mine") {
+		t.Fatal("user file deleted without --force")
+	}
+	s.must("revert", id, "--apply", "--force")
+	if s.exists(".tool") {
+		t.Fatal("--force did not remove the tree")
+	}
 }

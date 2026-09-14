@@ -5,12 +5,14 @@ package revert
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/morass/spoor/internal/diff"
 	"github.com/morass/spoor/internal/kb"
@@ -23,6 +25,7 @@ type Op string
 const (
 	Bootout      Op = "bootout"
 	Delete       Op = "delete"
+	DeleteTree   Op = "delete-tree"
 	Rmdir        Op = "rmdir"
 	Mkdir        Op = "mkdir"
 	Restore      Op = "restore"
@@ -34,7 +37,7 @@ const (
 	Skip         Op = "skip"
 )
 
-var order = map[Op]int{Bootout: 0, Delete: 1, Rmdir: 2, Mkdir: 3, Restore: 4, Chmod: 5, Bootstrap: 6, Crontab: 7, Conflict: 8, Unrestorable: 9, Skip: 10}
+var order = map[Op]int{Bootout: 0, Delete: 1, DeleteTree: 2, Rmdir: 2, Mkdir: 3, Restore: 4, Chmod: 5, Bootstrap: 6, Crontab: 7, Conflict: 8, Unrestorable: 9, Skip: 10}
 
 type Action struct {
 	Op     Op     `json:"op"`
@@ -58,6 +61,10 @@ type Options struct {
 	Categories map[kb.Category]bool
 	Force      bool
 	Home, GOOS string
+	// Since is when the commit's after-state was recorded. An added
+	// directory is removed as a whole tree only if nothing inside it was
+	// modified after this moment (its deeper contents were never scanned).
+	Since time.Time
 }
 
 func (o Options) wants(path string) bool {
@@ -192,6 +199,44 @@ func removeAction(p string, e *model.Entry) Action {
 	return Action{Op: Delete, Path: p}
 }
 
+// treeAction plans removing a directory the commit created, including
+// contents deeper than the watched depth (a cloned repo, a toolchain).
+func treeAction(p string, opt Options) Action {
+	clean := filepath.Clean(p)
+	if clean == "/" || clean == filepath.Clean(opt.Home) || strings.Count(clean, "/") < 2 {
+		return Action{Op: Unrestorable, Path: p, Reason: "refusing to remove a top-level directory"}
+	}
+	n := 0
+	newer := ""
+	limit := opt.Since.Add(2 * time.Second)
+	filepath.WalkDir(p, func(q string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		n++
+		if !opt.Since.IsZero() && newer == "" {
+			if fi, err := d.Info(); err == nil && fi.ModTime().After(limit) {
+				if q == p && !fi.IsDir() {
+					return nil
+				}
+				if !fi.IsDir() {
+					newer = q
+				}
+			}
+		}
+		return nil
+	})
+	if newer != "" {
+		a := Action{Op: DeleteTree, Path: p, Reason: fmt.Sprintf("%d entries", n-1)}
+		if opt.Force {
+			a.Reason = "forced: contains " + newer + " modified after the commit"
+			return a
+		}
+		return Action{Op: Conflict, Path: p, Reason: "contains " + newer + ", modified after the commit"}
+	}
+	return Action{Op: DeleteTree, Path: p, Reason: fmt.Sprintf("created by the commit, %d entries inside", n-1)}
+}
+
 func planFile(c model.Change, opt Options) []Action {
 	p := c.Path
 	conflict := func(a Action, why string) Action {
@@ -206,6 +251,8 @@ func planFile(c model.Change, opt Options) []Action {
 		switch {
 		case !stat(p).exists:
 			return []Action{{Op: Skip, Path: p, Reason: "already gone"}}
+		case c.After.Type == model.Dir && matches(p, c.After):
+			return []Action{treeAction(p, opt)}
 		case matches(p, c.After):
 			return []Action{removeAction(p, c.After)}
 		default:
@@ -378,6 +425,8 @@ func Apply(st *store.Store, acts []Action) []Result {
 			if os.IsNotExist(r.Err) {
 				r.Err, r.Note = nil, "already gone"
 			}
+		case DeleteTree:
+			r.Err = os.RemoveAll(a.Path)
 		case Rmdir:
 			if err := os.Remove(a.Path); err != nil && !os.IsNotExist(err) {
 				r.Note = "left in place: not empty"
@@ -436,6 +485,8 @@ func Script(st *store.Store, acts []Action, title string) string {
 			fmt.Fprintf(&sb, "launchctl bootstrap %s %s\n", shq(a.Domain), q)
 		case Delete:
 			fmt.Fprintf(&sb, "rm -f -- %s\n", q)
+		case DeleteTree:
+			fmt.Fprintf(&sb, "rm -rf -- %s\n", q)
 		case Rmdir:
 			fmt.Fprintf(&sb, "rmdir -- %s 2>/dev/null || true\n", q)
 		case Mkdir:

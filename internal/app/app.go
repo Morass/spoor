@@ -370,7 +370,7 @@ func (a *App) Revert(ref string, opt revert.Options, apply bool) (*RevertResult,
 	if err != nil {
 		return nil, err
 	}
-	opt.Home, opt.GOOS = a.Home, a.GOOS
+	opt.Home, opt.GOOS, opt.Since = a.Home, a.GOOS, post.Created
 	plan := revert.Plan(a.St, changes, opt)
 	res := &RevertResult{Plan: plan}
 	if !apply {

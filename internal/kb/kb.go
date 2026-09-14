@@ -71,6 +71,8 @@ var Rules = []Rule{
 	{Pattern: "~/.local/share/nvim/**", Category: Noise, Title: "Neovim state"},
 	{Pattern: "~/.local/state/**", Category: Noise, Title: "Application state"},
 	{Pattern: "**/__pycache__/**", Category: Noise, Title: "Python bytecode"},
+	{Pattern: "~/.npm", Category: Noise, Title: "npm cache"},
+	{Pattern: "~/.npm/**", Category: Noise, Title: "npm cache"},
 	{Pattern: "~/Library/Preferences/*.plist", Category: Noise, Title: "App preferences", Explain: "Apps rewrite these whenever a setting or window position changes; rarely interesting on their own."},
 
 	// --- persistence: things that start by themselves
@@ -165,6 +167,29 @@ var Rules = []Rule{
 
 const shellExplain = "Runs in every new terminal. Installers add PATH exports, `eval \"$(tool init)\"` hooks and completions here — each line executes with your permissions."
 const pathExplain = "A new command here becomes something you can type — and can shadow an existing command of the same name earlier in PATH."
+
+const toolchainExplain = "Home of a language toolchain or version manager. Installers usually pair it with lines in your shell startup files that put it on PATH; removing it without those lines breaks new shells."
+
+var toolchains = []string{".nvm", ".oh-my-zsh", ".rustup", ".cargo", ".pyenv", ".rbenv", ".sdkman", ".bun", ".deno", ".volta", ".asdf", ".jenv", ".goenv", ".fnm", ".nix-profile", ".opam", ".ghcup", ".juliaup", ".dotnet", ".conda", "miniconda3", "anaconda3", ".local/share/mise", ".local/share/pnpm"}
+
+// init inserts toolchain rules ahead of the generic data rules so that
+// "~/.local/share/*" does not claim them first.
+func init() {
+	var tc []Rule
+	for _, d := range toolchains {
+		for _, p := range []string{"~/" + d, "~/" + d + "/**"} {
+			tc = append(tc, Rule{Pattern: p, Category: Apps, Risk: Notice, Title: "Toolchain / version manager", Explain: toolchainExplain})
+		}
+	}
+	at := len(Rules)
+	for i, r := range Rules {
+		if r.Category == Data {
+			at = i
+			break
+		}
+	}
+	Rules = append(Rules[:at], append(tc, Rules[at:]...)...)
+}
 
 type compiled struct {
 	re   *regexp.Regexp

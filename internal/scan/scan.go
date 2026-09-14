@@ -3,6 +3,7 @@ package scan
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -86,6 +87,9 @@ func Scan(opt Options) (*Result, error) {
 		}
 	}
 	sort.Slice(m.Entries, func(i, j int) bool { return m.Entries[i].Path < m.Entries[j].Path })
+	if s.tcc > 0 {
+		s.warnings = append(s.warnings, fmt.Sprintf("%d folder(s) are protected by macOS privacy controls and were skipped (e.g. %s); grant your terminal Full Disk Access to watch them", s.tcc, s.tccFirst))
+	}
 	return &Result{Manifest: m, Warnings: s.warnings}, nil
 }
 
@@ -95,7 +99,8 @@ type scanner struct {
 	seen     map[string]int
 	m        *model.Manifest
 	warnings []string
-	tccWarn  bool
+	tcc      int
+	tccFirst string
 }
 
 func (s *scanner) warn(w string) {
@@ -137,12 +142,14 @@ func (s *scanner) walkRoot(root model.Root) {
 }
 
 func (s *scanner) permWarn(p string, err error) {
-	if errors.Is(err, fs.ErrPermission) || errors.Is(err, syscall.EPERM) {
-		if runtime.GOOS == "darwin" && !s.tccWarn && strings.Contains(err.Error(), "operation not permitted") {
-			s.tccWarn = true
-			s.warn("some folders are protected by macOS privacy controls; grant your terminal Full Disk Access to watch them (first: " + p + ")")
-			return
+	if runtime.GOOS == "darwin" && strings.Contains(err.Error(), "operation not permitted") {
+		if s.tcc == 0 {
+			s.tccFirst = p
 		}
+		s.tcc++
+		return
+	}
+	if errors.Is(err, fs.ErrPermission) || errors.Is(err, syscall.EPERM) {
 		s.warn("unreadable: " + p)
 		return
 	}
