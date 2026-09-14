@@ -47,6 +47,7 @@ It is a single Go binary for macOS and Linux with no runtime dependencies.
 - [Privacy](#privacy)
 - [Limits](#limits)
 - [Development](#development)
+- [License](#license)
 
 ## Install
 
@@ -381,3 +382,7 @@ sudo env SPOOR_BIN=$PWD/spoor ./e2e.test -test.v
 Layout: `cmd/spoor` (CLI and help), `internal/app` (operations), `store`,
 `scan`, `diff`, `kb` (knowledge base and analyzers), `revert`, `trace`, `try`,
 `brew`, `redact`, `tui`, `e2e/`, and `scripts/ansi2svg` (screenshot renderer).
+
+## License
+
+[MIT](LICENSE): use it, change it, share it, sell it. Keep the copyright notice.
