@@ -248,6 +248,9 @@ func Unified(st *store.Store, c model.Change, live bool) string {
 	switch {
 	case (before != nil && !bok) || (after != nil && !aok):
 		body = fmt.Sprintf("binary content: %s -> %s\n", sizeHash(c.Before, before), sizeHash(c.After, after))
+		if c.Before != nil && c.After != nil {
+			body += fmt.Sprintf("size change: %+d bytes\n", c.After.Size-c.Before.Size)
+		}
 	case before == nil && after == nil:
 	default:
 		if bt != at {

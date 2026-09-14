@@ -186,7 +186,7 @@ func (m *Model) loadCommits() error {
 }
 
 func (m *Model) openCommit(c *model.Commit) error {
-	_, post, changes, err := m.app.CommitChanges(c)
+	pre, post, changes, err := m.app.CommitChanges(c)
 	if err != nil {
 		return err
 	}
@@ -195,7 +195,7 @@ func (m *Model) openCommit(c *model.Commit) error {
 	m.postRoots, m.postState, m.postTime = post.Roots, post.State, post.Created
 	m.notes = m.app.St.Notes(c.ID)
 	m.writers = m.app.St.Trace(c.ID)
-	m.setItems(changes)
+	m.setItems(m.app.View(pre, post, changes))
 	return nil
 }
 
@@ -206,16 +206,39 @@ func (m *Model) openNow(head *model.Commit, changes []model.Change) {
 		m.postRoots, m.postState = hm.Roots, hm.State
 	}
 	m.notes, m.writers = map[string]string{}, map[string][]model.Writer{}
-	m.setItems(changes)
+	m.setItems(m.app.Items(changes))
 }
 
-func (m *Model) setItems(changes []model.Change) {
-	m.items = m.app.Items(changes)
+func (m *Model) setItems(items []app.Item) {
+	m.items = items
 	m.marks = map[string]bool{}
 	m.diffCache, m.detCache = map[string]string{}, map[string][]kb.Detail{}
 	m.cur, m.top, m.focus = 0, 0, focusList
 	m.screen = reviewScreen
 	m.rebuild()
+	// Open on the first change that has a readable diff: that is what a
+	// person wants to look at, not a directory or a moved link.
+	if it := m.current(); it != nil && !m.hasText(it) {
+		for i := 0; i < len(m.rows) && i < 300; i++ {
+			if !m.rows[i].header && m.hasText(&m.items[m.rows[i].item]) {
+				m.cur = i
+				m.refresh()
+				break
+			}
+		}
+	}
+}
+
+func (m *Model) hasText(it *app.Item) bool {
+	d := m.rawDiff(it)
+	return strings.HasPrefix(d, "@@ ") || strings.Contains(d, "\n@@ ")
+}
+
+func (m *Model) rowLabel(it app.Item) string {
+	if it.Virtual {
+		return strings.Fields(it.Rule.Title)[0] + "/" + it.Label
+	}
+	return m.app.Tilde(it.Path)
 }
 
 func (m *Model) current() *app.Item {
@@ -531,7 +554,7 @@ func (m *Model) visibleChanges(onlyMarked bool) []model.Change {
 			continue
 		}
 		it := m.items[r.item]
-		if onlyMarked && !m.marks[it.Path] {
+		if it.Virtual || (onlyMarked && !m.marks[it.Path]) {
 			continue
 		}
 		out = append(out, it.Change)
@@ -555,9 +578,11 @@ func (m *Model) targetPaths() map[string]bool {
 }
 
 func (m *Model) allChanges() []model.Change {
-	out := make([]model.Change, len(m.items))
-	for i, it := range m.items {
-		out[i] = it.Change
+	var out []model.Change
+	for _, it := range m.items {
+		if !it.Virtual {
+			out = append(out, it.Change)
+		}
 	}
 	return out
 }
@@ -566,7 +591,13 @@ func (m *Model) exportPath(suffix string) string {
 	return filepath.Join(m.app.St.Root, "exports", m.commit.ID+suffix)
 }
 
+const comparisonHint = "this row compares two version folders; press . to show the real entries and mark those to revert"
+
 func (m *Model) startRevert() {
+	if it := m.current(); it != nil && it.Virtual && len(m.marks) == 0 {
+		m.status = comparisonHint
+		return
+	}
 	if m.commit.Kind == model.KindTry {
 		m.status = "a try never touched the machine — use `spoor try apply` or `spoor try discard`"
 		return
@@ -903,6 +934,10 @@ func (m *Model) reviewKey(s string) (tea.Model, tea.Cmd) {
 		m.finput.SetValue(m.filter)
 		return m, m.finput.Focus()
 	case "x":
+		if it != nil && it.Virtual {
+			m.status = comparisonHint
+			return m, nil
+		}
 		if it != nil {
 			m.marks[it.Path] = !m.marks[it.Path]
 			if !m.marks[it.Path] {
@@ -910,7 +945,24 @@ func (m *Model) reviewKey(s string) (tea.Model, tea.Cmd) {
 			}
 			m.move(1)
 		}
+	case "]", "[":
+		d := 1
+		if s == "[" {
+			d = -1
+		}
+		for i := m.cur + d; i >= 0 && i < len(m.rows); i += d {
+			if !m.rows[i].header && m.hasText(&m.items[m.rows[i].item]) {
+				m.cur = i
+				m.refresh()
+				return m, nil
+			}
+		}
+		m.status = "no more text diffs in that direction"
 	case "X":
+		if it != nil && it.Virtual {
+			m.status = comparisonHint
+			return m, nil
+		}
 		if it != nil {
 			cat := it.Rule.Category
 			all := true
@@ -1070,7 +1122,7 @@ func (m *Model) footerView() string {
 	if m.screen == logScreen {
 		keys = "⏎ review · n live changes · s snapshot · r reload · ? help · q quit"
 	} else {
-		keys = "j/k move · tab pane · e edit · d vimdiff · o quickfix · n note · x mark · R revert · u undo.sh · . noise · / filter · esc back · ?"
+		keys = "j/k move · ]/[ next/prev diff · tab+J/K scroll · e edit · d vimdiff · o quickfix · n note · x mark · R revert · . noise · / filter · esc back · ?"
 	}
 	return dim.Render(trunc(status, m.w)) + "\n" + dim.Render(trunc(keys, m.w))
 }
@@ -1139,7 +1191,7 @@ func (m *Model) listView(w, h int) string {
 		case model.Removed:
 			kc = delC
 		}
-		p := truncLeft(m.app.Tilde(it.Path), iw-6)
+		p := truncLeft(m.rowLabel(it), iw-6)
 		plain := fmt.Sprintf("%s %s %s %s", mark, it.Rule.Risk.Icon(), it.Kind.Symbol(), p)
 		var l string
 		if i == m.cur {
@@ -1225,6 +1277,7 @@ func (m *Model) helpView() string {
   o / Q        open / write vim quickfix list    n                write a note on this change
   x / X        mark change / whole category      R                revert marked (or current) now
   u            write an undo shell script        .                show/hide noise (caches, logs)
+  ] / [        next / previous change with a diff
   /            filter by path or title           i                narrow screens: diff ↔ notes
   esc          back to history                   q                quit
 

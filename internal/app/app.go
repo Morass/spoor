@@ -446,6 +446,12 @@ func (a *App) RestorePlan(path, ref string, before bool) ([]revert.Action, *mode
 type Item struct {
 	model.Change
 	Rule kb.Rule
+	// Virtual items are comparisons derived for reading (an upgrade's old
+	// vs new version of a file), not changes on disk; they are never
+	// reverted.
+	Virtual bool
+	// Label, when set, is shown instead of the path.
+	Label string
 }
 
 func (a *App) Items(changes []model.Change) []Item {
@@ -455,7 +461,7 @@ func (a *App) Items(changes []model.Change) []Item {
 		if r.Title == "File" && isDir(c) {
 			r.Title = "Directory"
 		}
-		items[i] = Item{c, r}
+		items[i] = Item{Change: c, Rule: r}
 	}
 	sort.SliceStable(items, func(i, j int) bool {
 		oi, oj := kb.Rank(items[i].Rule.Category), kb.Rank(items[j].Rule.Category)

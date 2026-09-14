@@ -175,3 +175,47 @@ func TestLiveChangesScreen(t *testing.T) {
 		t.Errorf("notes on live view should explain: %q", m.status)
 	}
 }
+
+func TestUpgradeComparisonOpensFirst(t *testing.T) {
+	root, _ := filepath.EvalSymlinks(t.TempDir())
+	home := filepath.Join(root, "home")
+	os.MkdirAll(filepath.Join(home, "pkg/1.0"), 0o755)
+	os.WriteFile(filepath.Join(home, "pkg/1.0/NEWS"), []byte("1.0 initial\n"), 0o644)
+	os.WriteFile(filepath.Join(home, "pkg/1.0/bin"), []byte("\x00x"), 0o755)
+	t.Setenv("HOME", home)
+	t.Setenv("SPOOR_NO_STATE", "1")
+	a, err := app.Open(filepath.Join(root, "repo"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.Out, a.Err = io.Discard, io.Discard
+	roots := []model.Root{{Path: home, Depth: -1, Content: true}}
+	a.Snap(roots, false, "base")
+	c, _, err := a.Run(app.RunOptions{Roots: roots, Argv: []string{"sh", "-c",
+		`mkdir -p "$HOME/pkg/1.1" && printf '1.1 faster\n1.0 initial\n' > "$HOME/pkg/1.1/NEWS" && printf '\000yy' > "$HOME/pkg/1.1/bin" && rm -rf "$HOME/pkg/1.0"`}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := New(a, c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.Update(tea.WindowSizeMsg{Width: 150, Height: 40})
+	v := m.View()
+	for _, want := range []string{"UPGRADE", "pkg/NEWS", "+1.1 faster", "pkg 1.0 → 1.1"} {
+		if !strings.Contains(v, want) {
+			t.Errorf("missing %q:\n%s", want, v)
+		}
+	}
+	if it := m.current(); it == nil || !it.Virtual || it.Label != "NEWS" {
+		t.Fatalf("should open on the NEWS comparison, got %+v", it)
+	}
+	press(t, m, "x")
+	if !strings.Contains(m.status, "compares two version folders") || len(m.marks) != 0 {
+		t.Errorf("marking a comparison row: %q %v", m.status, m.marks)
+	}
+	press(t, m, "]")
+	if !strings.Contains(m.status, "no more text diffs") {
+		t.Errorf("] with no further text diff: %q", m.status)
+	}
+}

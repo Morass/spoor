@@ -4,6 +4,7 @@
 package main
 
 import (
+	"bufio"
 	"errors"
 	"flag"
 	"fmt"
@@ -31,7 +32,7 @@ var version = "0.1.0-dev"
 const usage = `spoor — see what commands do to your machine, inspect it, undo it.
 
 Record
-  spoor run [-m MSG] [--trace] [--review] -- CMD...   record CMD's effects as a commit
+  spoor run [-m MSG] [--trace] [--add-root SPEC] -- CMD...   record CMD's effects, then offer the review
   spoor snap [-m MSG]                                 commit the current state (if changed)
   spoor try -- CMD...                                 Linux: run CMD on overlays, review first
   spoor try apply|discard REF
@@ -240,6 +241,8 @@ func cmdSnap(a *app.App, args []string) (int, error) {
 	fs := newFS("snap")
 	msg := fs.String("m", "", "message")
 	roots, noState := rootFlags(fs)
+	var addRoots multiFlag
+	fs.Var(&addRoots, "add-root", "watch this too, on top of the configured roots (repeatable)")
 	if _, err := parse(fs, args); err != nil {
 		return 2, err
 	}
@@ -247,7 +250,11 @@ func cmdSnap(a *app.App, args []string) (int, error) {
 	if err != nil {
 		return 2, err
 	}
-	c, err := a.Snap(a.Roots(rs), a.State(*noState), *msg)
+	extra, err := parseRoots(a, addRoots)
+	if err != nil {
+		return 2, err
+	}
+	c, err := a.Snap(app.MergeRoots(a.Roots(rs), extra), a.State(*noState), *msg)
 	if err != nil {
 		return 1, err
 	}
@@ -255,10 +262,10 @@ func cmdSnap(a *app.App, args []string) (int, error) {
 		fmt.Fprintln(a.Out, "nothing changed since HEAD")
 		return 0, nil
 	}
-	_, post, changes, _ := a.CommitChanges(c)
+	pre, post, changes, _ := a.CommitChanges(c)
 	fmt.Fprintf(a.Out, "recorded %s (%d entries watched)\n", c.ID, len(post.Entries))
 	if c.Pre != "" {
-		a.PrintChanges(a.Out, changes, false, nil)
+		a.PrintChanges(a.Out, a.View(pre, post, changes), false, nil)
 	}
 	return 0, nil
 }
@@ -267,8 +274,11 @@ func cmdRun(a *app.App, args []string) (int, error) {
 	fs := newFS("run")
 	msg := fs.String("m", "", "message (default: the command)")
 	traceF := fs.Bool("trace", false, "attribute writes to processes (eslogger/strace)")
-	review := fs.Bool("review", false, "open the inspector afterwards")
+	review := fs.Bool("review", false, "open the inspector afterwards without asking")
+	noReview := fs.Bool("no-review", false, "do not offer the inspector afterwards")
 	roots, noState := rootFlags(fs)
+	var addRoots multiFlag
+	fs.Var(&addRoots, "add-root", "watch this too, on top of the configured roots (repeatable)")
 	i := indexOf(args, "--")
 	if i < 0 {
 		return 2, errors.New("usage: spoor run [flags] -- COMMAND...")
@@ -280,20 +290,51 @@ func cmdRun(a *app.App, args []string) (int, error) {
 	if err != nil {
 		return 2, err
 	}
-	c, exit, err := a.Run(app.RunOptions{Roots: a.Roots(rs), State: a.State(*noState), Trace: *traceF, Message: *msg, Argv: args[i+1:]})
+	extra, err := parseRoots(a, addRoots)
+	if err != nil {
+		return 2, err
+	}
+	argv := args[i+1:]
+	auto, notes := a.AutoRoots(argv)
+	for _, n := range notes {
+		fmt.Fprintln(a.Err, "spoor: "+n)
+	}
+	watch := app.MergeRoots(a.Roots(rs), append(extra, auto...))
+	c, exit, err := a.Run(app.RunOptions{Roots: watch, State: a.State(*noState), Trace: *traceF, Message: *msg, Argv: argv})
 	if err != nil {
 		return max(exit, 1), err
 	}
-	_, _, changes, _ := a.CommitChanges(c)
+	pre, post, changes, _ := a.CommitChanges(c)
+	items := a.View(pre, post, changes)
 	fmt.Fprintf(a.Err, "\nspoor: %s exited %d — commit %s\n", c.Command[0], exit, c.ID)
-	a.PrintChanges(a.Err, changes, false, a.St.Trace(c.ID))
+	a.PrintChanges(a.Err, items, false, a.St.Trace(c.ID))
 	fmt.Fprintf(a.Err, "\n  inspect: spoor review %s    undo: spoor revert %s --apply\n", c.ID, c.ID)
-	if *review && isatty.IsTerminal(os.Stdout.Fd()) {
-		if err := tui.Run(a, c.ID); err != nil {
-			return exit, err
+	return exit, offerReview(a, c.ID, *review, *noReview, items)
+}
+
+// offerReview opens the inspector after a recording when a person is at
+// the terminal: straight away with --review, otherwise after asking.
+func offerReview(a *app.App, id string, force, skip bool, items []app.Item) error {
+	interesting := 0
+	for _, it := range items {
+		if it.Rule.Category != kb.Noise {
+			interesting++
 		}
 	}
-	return exit, nil
+	tty := isatty.IsTerminal(os.Stdout.Fd()) && isatty.IsTerminal(os.Stdin.Fd())
+	if !tty || skip || (!force && (interesting == 0 || os.Getenv("SPOOR_NO_PROMPT") != "")) {
+		return nil
+	}
+	if !force {
+		fmt.Fprint(a.Err, "\n  Open the review now? [Y/n] ")
+		line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+		switch strings.ToLower(strings.TrimSpace(line)) {
+		case "", "y", "yes":
+		default:
+			return nil
+		}
+	}
+	return tui.Run(a, id)
 }
 
 func indexOf(args []string, s string) int {
@@ -317,9 +358,10 @@ func cmdStatus(a *app.App, args []string) (int, error) {
 		return 1, err
 	}
 	fmt.Fprintf(a.Out, "since %s (%s, %s):\n", head.ID, head.Kind, head.Time.Local().Format("2006-01-02 15:04"))
-	a.PrintChanges(a.Out, changes, *all, nil)
+	items := a.Items(changes)
+	a.PrintChanges(a.Out, items, *all, nil)
 	if *patch {
-		printPatches(a, changes, *all, true)
+		printPatches(a, items, *all, true)
 	}
 	return 0, nil
 }
@@ -371,10 +413,11 @@ func cmdShow(a *app.App, args []string) (int, error) {
 	if err != nil {
 		return 1, err
 	}
-	_, _, changes, err := a.CommitChanges(c)
+	pre, post, changes, err := a.CommitChanges(c)
 	if err != nil {
 		return 1, err
 	}
+	items := a.View(pre, post, changes)
 	fmt.Fprintf(a.Out, "commit %s  %s  %s\n", c.ID, c.Kind, c.Time.Local().Format("2006-01-02 15:04:05"))
 	if c.Parent != "" {
 		fmt.Fprintf(a.Out, "parent %s\n", c.Parent)
@@ -389,7 +432,7 @@ func cmdShow(a *app.App, args []string) (int, error) {
 		fmt.Fprintf(a.Out, "try %s  (workspace %s)\n", c.TryState, c.Workspace)
 	}
 	fmt.Fprintf(a.Out, "    %s\n", c.Message)
-	a.PrintChanges(a.Out, changes, *all, a.St.Trace(c.ID))
+	a.PrintChanges(a.Out, items, *all, a.St.Trace(c.ID))
 	notes := a.St.Notes(c.ID)
 	if len(notes) > 0 {
 		fmt.Fprintln(a.Out, "\n  NOTES")
@@ -403,14 +446,14 @@ func cmdShow(a *app.App, args []string) (int, error) {
 		}
 	}
 	if *patch {
-		printPatches(a, changes, *all, c.ID == a.St.Head())
+		printPatches(a, items, *all, c.ID == a.St.Head())
 	}
 	return 0, nil
 }
 
-func printPatches(a *app.App, changes []model.Change, all, live bool) {
+func printPatches(a *app.App, items []app.Item, all, live bool) {
 	color := isatty.IsTerminal(os.Stdout.Fd())
-	for _, it := range a.Items(changes) {
+	for _, it := range items {
 		if it.Rule.Category == kb.Noise && !all {
 			continue
 		}
@@ -418,7 +461,11 @@ func printPatches(a *app.App, changes []model.Change, all, live bool) {
 		if strings.TrimSpace(u) == "" {
 			continue
 		}
-		fmt.Fprintf(a.Out, "\n=== %s %s\n", it.Kind.Symbol(), a.Tilde(it.Path))
+		if it.Virtual {
+			fmt.Fprintf(a.Out, "\n=== %s %s: %s\n", it.Kind.Symbol(), it.Rule.Title, it.Label)
+		} else {
+			fmt.Fprintf(a.Out, "\n=== %s %s\n", it.Kind.Symbol(), a.Tilde(it.Path))
+		}
 		for _, l := range strings.Split(strings.TrimRight(u, "\n"), "\n") {
 			if color {
 				switch {
@@ -475,9 +522,10 @@ func cmdDiff(a *app.App, args []string) (int, error) {
 		changes = f
 	}
 	fmt.Fprintf(a.Out, "%s → %s\n", pos[0], pos[1])
-	a.PrintChanges(a.Out, changes, *all, nil)
+	items := a.View(ma, mb, changes)
+	a.PrintChanges(a.Out, items, *all, nil)
 	if *patch {
-		printPatches(a, changes, *all, live)
+		printPatches(a, items, *all, live)
 	}
 	return 0, nil
 }
@@ -772,9 +820,9 @@ func cmdTry(a *app.App, args []string) (int, error) {
 			if err != nil {
 				return 1, err
 			}
-			_, _, changes, _ := a.CommitChanges(c)
+			pre, post, changes, _ := a.CommitChanges(c)
 			fmt.Fprintf(a.Out, "applied — recorded as commit %s\n", c.ID)
-			a.PrintChanges(a.Out, changes, false, nil)
+			a.PrintChanges(a.Out, a.View(pre, post, changes), false, nil)
 			return 0, nil
 		case "discard":
 			if len(args) != 2 {
@@ -789,7 +837,8 @@ func cmdTry(a *app.App, args []string) (int, error) {
 	}
 	fs := newFS("try")
 	msg := fs.String("m", "", "message")
-	review := fs.Bool("review", false, "open the inspector afterwards")
+	review := fs.Bool("review", false, "open the inspector afterwards without asking")
+	noReview := fs.Bool("no-review", false, "do not offer the inspector afterwards")
 	roots, _ := rootFlags(fs)
 	i := indexOf(args, "--")
 	if i < 0 {
@@ -806,14 +855,12 @@ func cmdTry(a *app.App, args []string) (int, error) {
 	if err != nil {
 		return max(exit, 1), err
 	}
-	_, _, changes, _ := a.CommitChanges(c)
+	pre, post, changes, _ := a.CommitChanges(c)
+	items := a.View(pre, post, changes)
 	fmt.Fprintf(a.Err, "\nspoor: try %s — exit %d, nothing on disk changed yet\n", c.ID, exit)
-	a.PrintChanges(a.Err, changes, false, nil)
+	a.PrintChanges(a.Err, items, false, nil)
 	fmt.Fprintf(a.Err, "\n  inspect: spoor review %s    keep: spoor try apply %s    drop: spoor try discard %s\n", c.ID, c.ID, c.ID)
-	if *review && isatty.IsTerminal(os.Stdout.Fd()) {
-		return exit, tui.Run(a, c.ID)
-	}
-	return exit, nil
+	return exit, offerReview(a, c.ID, *review, *noReview, items)
 }
 
 func cmdGC(a *app.App, args []string) (int, error) {

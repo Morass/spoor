@@ -44,6 +44,7 @@ type sandbox struct {
 	t          *testing.T
 	root, home string
 	repo       string
+	env        []string
 }
 
 func newSandbox(t *testing.T) *sandbox {
@@ -59,6 +60,7 @@ func (s *sandbox) spoor(args ...string) (string, string, int) {
 		"HOME=" + s.home, "SPOOR_HOME=" + s.repo, "SPOOR_NO_STATE=1", "TERM=dumb",
 		"PATH=" + os.Getenv("PATH"), "SPOOR_TRY_DIR=" + filepath.Join(s.root, "try"),
 	}
+	cmd.Env = append(cmd.Env, s.env...)
 	cmd.Dir = s.root
 	var o, e bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &o, &e
@@ -103,13 +105,15 @@ func (s *sandbox) exists(rel string) bool {
 
 // fingerprint captures every path under home: type, permission bits,
 // content hash and link target.
-func (s *sandbox) fingerprint() map[string]string {
+func (s *sandbox) fingerprint() map[string]string { return fingerprintDir(s.home) }
+
+func fingerprintDir(root string) map[string]string {
 	out := map[string]string{}
-	filepath.WalkDir(s.home, func(p string, d fs.DirEntry, err error) error {
+	filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
-		rel, _ := filepath.Rel(s.home, p)
+		rel, _ := filepath.Rel(root, p)
 		fi, _ := os.Lstat(p)
 		v := fmt.Sprintf("%s %o", fi.Mode().Type(), fi.Mode().Perm())
 		switch {
@@ -462,4 +466,58 @@ func TestAddedDirectoryTreeRemovedUnlessTouchedLater(t *testing.T) {
 	if s.exists(".tool") {
 		t.Fatal("--force did not remove the tree")
 	}
+}
+
+func TestBrewUpgradeIsReadAsFileDiffsAndRevertsExactly(t *testing.T) {
+	s := newSandbox(t)
+	prefix := filepath.Join(s.root, "brew")
+	cellar := filepath.Join(prefix, "Cellar")
+	s.env = append(s.env, "HOMEBREW_CELLAR="+cellar)
+	put := func(rel, body string, mode os.FileMode) {
+		p := filepath.Join(prefix, rel)
+		os.MkdirAll(filepath.Dir(p), 0o755)
+		os.WriteFile(p, []byte(body), mode)
+	}
+	put("Cellar/tree/2.2.1/CHANGES", "Version 2.2.1\n  - fixed -J\n", 0o644)
+	put("Cellar/tree/2.2.1/share/man/man1/tree.1", ".TH TREE 1 \"2.2.1\"\n", 0o644)
+	put("Cellar/tree/2.2.1/bin/tree", "\x00bin-2.2.1", 0o755)
+	put("Cellar/tree/2.2.1/LICENSE", "same in both\n", 0o644)
+	os.MkdirAll(filepath.Join(prefix, "opt"), 0o755)
+	os.Symlink("../Cellar/tree/2.2.1", filepath.Join(prefix, "opt/tree"))
+	fake := filepath.Join(s.root, "bin", "brew")
+	os.MkdirAll(filepath.Dir(fake), 0o755)
+	os.WriteFile(fake, []byte(`#!/bin/sh
+C="$HOMEBREW_CELLAR"; P=$(dirname "$C")
+mkdir -p "$C/tree/2.3.2/bin" "$C/tree/2.3.2/share/man/man1"
+printf 'Version 2.3.2\n  - new --gitignore\nVersion 2.2.1\n  - fixed -J\n' > "$C/tree/2.3.2/CHANGES"
+printf '.TH TREE 1 "2.3.2"\n' > "$C/tree/2.3.2/share/man/man1/tree.1"
+printf 'same in both\n' > "$C/tree/2.3.2/LICENSE"
+printf '\000bin-2.3.2-longer' > "$C/tree/2.3.2/bin/tree"; chmod 755 "$C/tree/2.3.2/bin/tree"
+ln -sfn ../Cellar/tree/2.3.2 "$P/opt/tree"
+rm -rf "$C/tree/2.2.1"
+`), 0o755)
+	s.must("init", "--root", s.home+":1", "--no-state")
+	s.must("snap")
+	before := fingerprintDir(prefix)
+
+	_, errOut, code := s.spoor("run", "--", fake, "upgrade", "tree")
+	if code != 0 || !strings.Contains(errOut, "capturing the files of tree") {
+		t.Fatalf("run: code %d\n%s", code, errOut)
+	}
+	if !strings.Contains(errOut, "tree 2.2.1 → 2.3.2") {
+		t.Errorf("run summary should name the upgrade:\n%s", errOut)
+	}
+	show := s.must("show", "--patch")
+	for _, want := range []string{"UPGRADE", "tree 2.2.1 → 2.3.2", "~ CHANGES", "~ share/man/man1/tree.1", "+  - new --gitignore", `-.TH TREE 1 "2.2.1"`, "size change: +7 bytes"} {
+		if !strings.Contains(show, want) {
+			t.Errorf("show --patch missing %q:\n%s", want, show)
+		}
+	}
+	summary := show[:strings.Index(show, "===")]
+	if strings.Contains(summary, "LICENSE") || strings.Contains(summary, "2.3.2/CHANGES") {
+		t.Errorf("identical files and raw version-dir entries should not clutter the summary:\n%s", summary)
+	}
+
+	s.must("revert", "HEAD", "--apply")
+	sameTree(t, "brew prefix after revert", fingerprintDir(prefix), before)
 }

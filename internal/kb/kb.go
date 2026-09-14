@@ -17,6 +17,7 @@ const (
 	Shell       Category = "shell"
 	Path        Category = "path"
 	Apps        Category = "apps"
+	Upgrade     Category = "upgrade"
 	Config      Category = "config"
 	State       Category = "state"
 	Data        Category = "data"
@@ -149,6 +150,14 @@ var Rules = []Rule{
 	{Pattern: "~/.npm-global/bin/*", Category: Path, Risk: Notice, Title: "npm global command", Explain: pathExplain},
 
 	// --- apps
+	{Pattern: "/opt/homebrew/Cellar/*", Category: Apps, Risk: Notice, Title: "Homebrew package", Explain: brewExplain},
+	{Pattern: "/usr/local/Cellar/*", Category: Apps, Risk: Notice, Title: "Homebrew package", Explain: brewExplain},
+	{Pattern: "/opt/homebrew/Cellar/*/*", Category: Apps, Risk: Notice, Title: "Homebrew package version", Explain: brewExplain},
+	{Pattern: "/usr/local/Cellar/*/*", Category: Apps, Risk: Notice, Title: "Homebrew package version", Explain: brewExplain},
+	{Pattern: "/opt/homebrew/Cellar/**", Category: Data, Title: "Homebrew package file"},
+	{Pattern: "/usr/local/Cellar/**", Category: Data, Title: "Homebrew package file"},
+	{Pattern: "/opt/homebrew/opt/*", Category: Apps, Title: "Homebrew active-version link", Explain: "Points at the package version currently in use; an upgrade repoints it."},
+	{Pattern: "/usr/local/opt/*", Category: Apps, Title: "Homebrew active-version link", Explain: "Points at the package version currently in use; an upgrade repoints it."},
 	{Pattern: "/Applications/*", OS: "darwin", Category: Apps, Title: "Application", Explain: "An app bundle in /Applications."},
 	{Pattern: "~/Applications/*", OS: "darwin", Category: Apps, Title: "Application (user)"},
 	{Pattern: "~/.local/share/applications/*", OS: "linux", Category: Apps, Title: "Desktop launcher entry"},
@@ -164,6 +173,8 @@ var Rules = []Rule{
 	{Pattern: "~/Library/Application Support/*", OS: "darwin", Category: Data, Title: "App data folder"},
 	{Pattern: "~/.local/share/*", Category: Data, Title: "App data folder"},
 }
+
+const brewExplain = "Homebrew keeps each installed version in its own directory. Inspect upgrades here; undo them with brew itself (spoor can restore captured files, but brew's own records would disagree)."
 
 const shellExplain = "Runs in every new terminal. Installers add PATH exports, `eval \"$(tool init)\"` hooks and completions here — each line executes with your permissions."
 const pathExplain = "A new command here becomes something you can type — and can shadow an existing command of the same name earlier in PATH."
@@ -257,7 +268,7 @@ func Classify(path, home, goos string) Rule {
 	return fallback
 }
 
-var categoryOrder = map[Category]int{Persistence: 0, Trust: 1, Shell: 2, Path: 3, Apps: 4, Config: 5, State: 6, Data: 7, Noise: 8}
+var categoryOrder = map[Category]int{Persistence: 0, Trust: 1, Upgrade: 2, Shell: 3, Path: 4, Apps: 5, Config: 6, State: 7, Data: 8, Noise: 9}
 
 // SortCategories orders categories from most to least important.
 func SortCategories(cs []Category) {

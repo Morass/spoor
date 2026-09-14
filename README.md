@@ -35,6 +35,19 @@ spoor revert HEAD                      # dry-run plan
 spoor revert HEAD --apply              # do it (recorded as a new commit)
 ```
 
+After a run, spoor offers to open the review right away (`--review` opens
+it without asking, `--no-review` skips the question).
+
+### Package upgrades
+
+`spoor run -- brew upgrade jq` automatically watches `jq`'s own Cellar
+folder, with file contents. An upgrade creates a new version folder and
+deletes the old one. The review pairs the two and shows each file as a real
+diff under **UPGRADE**: changelog, man page, formula, headers. Binaries show
+their size change. In the review, `]` / `[` jump between readable diffs.
+Name the packages to get file diffs; a bare `brew upgrade` only records
+which version folders appeared and disappeared.
+
 Use it as a pure inspector without running anything through it:
 
 ```sh
@@ -47,7 +60,7 @@ spoor review now           # inspect those live changes interactively
 
 | | |
 |---|---|
-| `run [-m MSG] [--trace] [--review] -- CMD` | record CMD's effects; passes CMD's exit code through |
+| `run [-m MSG] [--trace] [--add-root SPEC] -- CMD` | record CMD's effects (exit code passed through), then offer the review |
 | `snap [-m MSG]` | commit the current state if it changed |
 | `try -- CMD` / `try apply REF` / `try discard REF` | Linux: run CMD on copy-on-write overlays, review, then apply or drop |
 | `status [--patch]` | live changes since HEAD (nothing stored) |
@@ -77,6 +90,7 @@ it exits`, the process that wrote it, and your own note).
 | key | |
 |---|---|
 | `j/k`, `tab` | move, switch pane |
+| `]` / `[` | next / previous change with a readable diff |
 | `J/K`, `space` | scroll the diff |
 | `e` | open the live file in `$EDITOR` |
 | `d` | `vimdiff` (or `nvim -d`, or `$SPOOR_DIFFTOOL`) of recorded before vs after |

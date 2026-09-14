@@ -16,12 +16,16 @@ import (
 
 // Counts summarises a change list.
 type Counts struct {
-	Added, Removed, Modified, Other, Warn, Noise int
+	Added, Removed, Modified, Other, Warn, Noise, Compared int
 }
 
 func (a *App) Count(items []Item) Counts {
 	var c Counts
 	for _, it := range items {
+		if it.Virtual {
+			c.Compared++
+			continue
+		}
 		if it.Rule.Category == kb.Noise {
 			c.Noise++
 			continue
@@ -51,17 +55,20 @@ func (c Counts) String() string {
 	if c.Warn > 0 {
 		s += fmt.Sprintf(" ⚠%d", c.Warn)
 	}
+	if c.Compared > 0 {
+		s += fmt.Sprintf(" ↑%d compared", c.Compared)
+	}
 	return s
 }
 
 // PrintChanges writes a grouped, human summary of changes.
-func (a *App) PrintChanges(w io.Writer, changes []model.Change, showNoise bool, writers map[string][]model.Writer) {
-	items := a.Items(changes)
+func (a *App) PrintChanges(w io.Writer, items []Item, showNoise bool, writers map[string][]model.Writer) {
 	if len(items) == 0 {
 		fmt.Fprintln(w, "  no changes")
 		return
 	}
 	var cat kb.Category = "-"
+	title := ""
 	hidden := 0
 	for _, it := range items {
 		if it.Rule.Category == kb.Noise && !showNoise {
@@ -71,6 +78,14 @@ func (a *App) PrintChanges(w io.Writer, changes []model.Change, showNoise bool, 
 		if it.Rule.Category != cat {
 			cat = it.Rule.Category
 			fmt.Fprintf(w, "\n  %s\n", strings.ToUpper(string(cat)))
+		}
+		if it.Virtual {
+			if it.Rule.Title != title {
+				title = it.Rule.Title
+				fmt.Fprintf(w, "  ◆ %s\n", title)
+			}
+			fmt.Fprintf(w, "      %s %s\n", it.Kind.Symbol(), it.Label)
+			continue
 		}
 		p := a.Tilde(it.Path)
 		if it.OldPath != "" {
