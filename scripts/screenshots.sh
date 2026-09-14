@@ -118,7 +118,7 @@ ENV=(env -i HOME="$DEMO_HOME" PATH="$W/bin:/usr/bin:/bin" TERM=xterm-256color LA
 "${ENV[@]}" "$W/bin/spoor" snap -m "baseline" >/dev/null
 
 # ---------------------------------------------------------------- driving the terminal
-COLS=118 ROWS=34
+COLS=126 ROWS=34
 "${ENV[@]}" "$TMUX_BIN" -S "$SOCK" -f /dev/null new-session -d -s t -x $COLS -y $ROWS \
 	"PS1='\[\e[1;32m\]\$\[\e[0m\] ' bash --noprofile --norc"
 $T set -g status off
